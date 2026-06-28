@@ -20,25 +20,35 @@ services:
       timeout: 5s
       retries: 10
 
-  # Opcional: subir a API junto com o banco (docker compose --profile api up).
-  # Para desenvolvimento normal, rode a API com `npm run dev` no host.
+  # Interface WEB para inspecionar o banco pelo navegador (alternativa leve ao DBeaver).
+  # Acesse http://localhost:8080  ->  Sistema: PostgreSQL | Servidor: db |
+  # Usuario: poupeazy | Senha: poupeazy | Base: poupeazy
+  adminer:
+    image: adminer:4
+    container_name: poupeazy_adminer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  # API do PoupEazy. Sobe junto com o banco em `docker compose up`.
+  # Le as variaveis do arquivo .env (JWT_SECRET, PLUGGY_*, etc.) e sobrescreve
+  # apenas o que e especifico do ambiente Docker (host do banco = `db`).
   api:
-    profiles: ["api"]
     build: .
     container_name: poupeazy_api
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
-      PORT: 3001
+      # Dentro da rede do Docker o banco e acessado pelo hostname `db`, nao localhost.
       DATABASE_URL: postgres://poupeazy:poupeazy@db:5432/poupeazy
-      JWT_SECRET: troque_este_segredo_por_um_valor_aleatorio_longo
-      JWT_EXPIRES_IN: 7d
-      NODE_ENV: development
-      CORS_ORIGIN: "*"
-      PLUGGY_CLIENT_ID: ${PLUGGY_CLIENT_ID:-}
-      PLUGGY_CLIENT_SECRET: ${PLUGGY_CLIENT_SECRET:-}
+      PORT: 3001
     ports:
       - "3001:3001"
 
