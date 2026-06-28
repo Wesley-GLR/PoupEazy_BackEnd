@@ -1,0 +1,362 @@
+{
+  "info": {
+    "name": "PoupEazy Backend",
+    "description": "API do backend proprio do PoupEazy (auth + banco + Open Finance). Faca login na pasta Auth para preencher automaticamente a variavel {{token}}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001/api", "type": "string" },
+    { "key": "token", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const json = pm.response.json();",
+                  "  if (json.token) { pm.collectionVariables.set('token', json.token); }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"teste@poupeazy.com\",\n  \"password\": \"123456\",\n  \"nome\": \"Usuario Teste\",\n  \"telefone\": \"34999999999\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  if (json.token) { pm.collectionVariables.set('token', json.token); }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"teste@poupeazy.com\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"teste@poupeazy.com\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["auth", "forgot-password"] }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"token\": \"COLE_O_resetToken_AQUI\",\n  \"novaSenha\": \"novaSenha123\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["auth", "reset-password"] }
+          }
+        },
+        {
+          "name": "Update Password (logado)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"novaSenha\": \"123456\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/password", "host": ["{{baseUrl}}"], "path": ["auth", "password"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Profile",
+      "item": [
+        {
+          "name": "Get Profile",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/profile", "host": ["{{baseUrl}}"], "path": ["profile"] } }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"nome\": \"Novo Nome\",\n  \"telefone\": \"34988887777\"\n}" },
+            "url": { "raw": "{{baseUrl}}/profile", "host": ["{{baseUrl}}"], "path": ["profile"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Metas",
+      "item": [
+        {
+          "name": "Listar Metas",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/metas", "host": ["{{baseUrl}}"], "path": ["metas"] } }
+        },
+        {
+          "name": "Criar Meta",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"nome\": \"Viagem\",\n  \"descricao\": \"Ferias\",\n  \"valor_objetivo\": 5000,\n  \"data_limite\": \"2026-12-31\"\n}" },
+            "url": { "raw": "{{baseUrl}}/metas", "host": ["{{baseUrl}}"], "path": ["metas"] }
+          }
+        },
+        {
+          "name": "Atualizar Meta",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"valor_objetivo\": 6000,\n  \"status\": \"ativa\"\n}" },
+            "url": { "raw": "{{baseUrl}}/metas/:id", "host": ["{{baseUrl}}"], "path": ["metas", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        },
+        {
+          "name": "Deletar Meta",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/metas/:id", "host": ["{{baseUrl}}"], "path": ["metas", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orcamentos",
+      "item": [
+        {
+          "name": "Listar Orcamentos",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/orcamentos", "host": ["{{baseUrl}}"], "path": ["orcamentos"] } }
+        },
+        {
+          "name": "Criar Orcamento",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"mes\": 6,\n  \"ano\": 2026,\n  \"valor_planejado\": 3000\n}" },
+            "url": { "raw": "{{baseUrl}}/orcamentos", "host": ["{{baseUrl}}"], "path": ["orcamentos"] }
+          }
+        },
+        {
+          "name": "Get or Create Orcamento",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"mes\": 6,\n  \"ano\": 2026\n}" },
+            "url": { "raw": "{{baseUrl}}/orcamentos/get-or-create", "host": ["{{baseUrl}}"], "path": ["orcamentos", "get-or-create"] }
+          }
+        },
+        {
+          "name": "Atualizar Orcamento",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"valor_planejado\": 3500\n}" },
+            "url": { "raw": "{{baseUrl}}/orcamentos/:id", "host": ["{{baseUrl}}"], "path": ["orcamentos", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Categorias",
+      "item": [
+        {
+          "name": "Listar Categorias",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/categorias", "host": ["{{baseUrl}}"], "path": ["categorias"] } }
+        },
+        {
+          "name": "Criar Categoria",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"nome\": \"Pets\",\n  \"tipo\": \"despesa_variavel\",\n  \"icone\": \"paw\"\n}" },
+            "url": { "raw": "{{baseUrl}}/categorias", "host": ["{{baseUrl}}"], "path": ["categorias"] }
+          }
+        },
+        {
+          "name": "Atualizar Categoria",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"nome\": \"Pets e Animais\"\n}" },
+            "url": { "raw": "{{baseUrl}}/categorias/:id", "host": ["{{baseUrl}}"], "path": ["categorias", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        },
+        {
+          "name": "Deletar Categoria",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/categorias/:id", "host": ["{{baseUrl}}"], "path": ["categorias", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Despesas",
+      "item": [
+        {
+          "name": "Listar Despesas",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/despesas", "host": ["{{baseUrl}}"], "path": ["despesas"] } }
+        },
+        {
+          "name": "Criar Despesa",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"id_orcamento\": \"COLE_ID_ORCAMENTO\",\n  \"id_categoria\": \"COLE_ID_CATEGORIA\",\n  \"valor\": 49.9,\n  \"data_transacao\": \"2026-06-15\",\n  \"descricao\": \"Mercado\",\n  \"tipo\": \"despesa\",\n  \"origem\": \"manual\",\n  \"status\": \"confirmada\"\n}" },
+            "url": { "raw": "{{baseUrl}}/despesas", "host": ["{{baseUrl}}"], "path": ["despesas"] }
+          }
+        },
+        {
+          "name": "Atualizar Despesa",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"valor\": 59.9,\n  \"descricao\": \"Mercado (corrigido)\"\n}" },
+            "url": { "raw": "{{baseUrl}}/despesas/:id", "host": ["{{baseUrl}}"], "path": ["despesas", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        },
+        {
+          "name": "Deletar Despesa",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/despesas/:id", "host": ["{{baseUrl}}"], "path": ["despesas", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notificacoes",
+      "item": [
+        {
+          "name": "Listar Notificacoes",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/notificacoes", "host": ["{{baseUrl}}"], "path": ["notificacoes"] } }
+        },
+        {
+          "name": "Marcar como Lida",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"lida\": true\n}" },
+            "url": { "raw": "{{baseUrl}}/notificacoes/:id", "host": ["{{baseUrl}}"], "path": ["notificacoes", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        },
+        {
+          "name": "Deletar Notificacao",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/notificacoes/:id", "host": ["{{baseUrl}}"], "path": ["notificacoes", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Integracoes (Open Finance)",
+      "item": [
+        {
+          "name": "Listar Conexoes Ativas",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/integracoes", "host": ["{{baseUrl}}"], "path": ["integracoes"] } }
+        },
+        {
+          "name": "Conectar Banco",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"instituicao\": \"Banco Sandbox\",\n  \"itemId\": \"COLE_ITEM_ID_DA_PLUGGY\"\n}" },
+            "url": { "raw": "{{baseUrl}}/integracoes", "host": ["{{baseUrl}}"], "path": ["integracoes"] }
+          }
+        },
+        {
+          "name": "Desconectar Banco",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/integracoes/:id", "host": ["{{baseUrl}}"], "path": ["integracoes", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pluggy",
+      "item": [
+        {
+          "name": "Gerar Connect Token",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/pluggy/token", "host": ["{{baseUrl}}"], "path": ["pluggy", "token"] } }
+        },
+        {
+          "name": "Buscar Extrato (transactions)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/pluggy/transactions/:itemId", "host": ["{{baseUrl}}"], "path": ["pluggy", "transactions", ":itemId"], "variable": [{ "key": "itemId", "value": "" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Relatorios (Views)",
+      "item": [
+        {
+          "name": "Resumo Mensal",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/relatorios/resumo-mensal", "host": ["{{baseUrl}}"], "path": ["relatorios", "resumo-mensal"] } }
+        },
+        {
+          "name": "Progresso das Metas",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/relatorios/progresso-metas", "host": ["{{baseUrl}}"], "path": ["relatorios", "progresso-metas"] } }
+        },
+        {
+          "name": "Historico Comparativo",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/relatorios/historico", "host": ["{{baseUrl}}"], "path": ["relatorios", "historico"] } }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] } }
+    }
+  ]
+}
