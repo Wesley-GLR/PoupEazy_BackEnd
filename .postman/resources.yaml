@@ -1,0 +1,7 @@
+# Use this workspace to collaborate
+workspace:
+  id: 5c9111ae-93cf-4ae6-84a5-1f6e460e4eaa
+
+localResources:
+  collections:
+    - ..\PoupEazy.postman_collection.json
