@@ -1,0 +1,28 @@
+# Blueprint do Render para a API do PoupEazy.
+# Em render.com: New > Blueprint > conectar este repositorio.
+# O Render le este arquivo e cria o Web Service ja configurado.
+# As variaveis com "sync: false" precisam ser preenchidas no painel (sao secretas).
+services:
+  - type: web
+    name: poupeazy-api
+    runtime: docker
+    plan: free
+    region: oregon          # use a mesma regiao do banco no Neon para menor latencia
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: JWT_SECRET
+        generateValue: true   # o Render gera um segredo forte automaticamente
+      - key: DATABASE_URL
+        sync: false           # connection string do Neon (com ?sslmode=require)
+      - key: CORS_ORIGIN
+        sync: false           # URL do frontend (ex.: https://seu-app.vercel.app) ou * em teste
+      - key: PLUGGY_CLIENT_ID
+        sync: false           # opcional, apenas se usar Open Finance
+      - key: PLUGGY_CLIENT_SECRET
+        sync: false           # opcional, apenas se usar Open Finance
