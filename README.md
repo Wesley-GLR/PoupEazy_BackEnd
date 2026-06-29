@@ -140,38 +140,29 @@ Depois rode `npm install` e `npm run dev`. O frontend ja consome este backend
 
 ---
 
-## 5. Deploy gratuito (depois de testar localmente)
+## 5. Hospedagem em producao
 
-Recomendacao: **API no Render + PostgreSQL no Neon** (ambos com plano gratuito).
+O projeto esta hospedado e disponivel publicamente:
 
-### 5.1 Banco no Neon
+| Servico | Plataforma | URL |
+|---------|------------|-----|
+| Frontend | Vercel | [poup-eazy.vercel.app](https://poup-eazy.vercel.app) |
+| API (Backend) | Render | [poupeazy-backend.onrender.com](https://poupeazy-backend.onrender.com) |
+| Banco de dados | Neon (PostgreSQL) | _(acesso interno)_ |
 
-1. Crie uma conta em [neon.tech](https://neon.tech) e um projeto Postgres.
-2. Copie a **connection string** (formato `postgres://...?sslmode=require`).
-3. Rode o `db/schema.sql` no SQL Editor do Neon (ou conecte via DBeaver e execute).
+Para testar a API diretamente:
 
-### 5.2 API no Render
-
-1. Suba esta pasta (`PoupEazy_BackEnd`) para um repositorio no GitHub.
-2. Em [render.com](https://render.com): **New > Web Service**, aponte para o repo.
-   O Render detecta o `Dockerfile` automaticamente.
-3. Configure as variaveis de ambiente do servico:
-   - `DATABASE_URL` = connection string do Neon
-   - `JWT_SECRET` = um valor longo e aleatorio
-   - `JWT_EXPIRES_IN` = `7d`
-   - `NODE_ENV` = `production`
-   - `CORS_ORIGIN` = a URL do seu frontend (ex.: `https://seu-app.vercel.app`)
-   - `PLUGGY_CLIENT_ID` e `PLUGGY_CLIENT_SECRET` (se usar Open Finance)
-4. Apos o deploy, atualize o `VITE_API_URL` do frontend para
-   `https://SEU-SERVICO.onrender.com/api`.
+```
+GET https://poupeazy-backend.onrender.com/api/health
+```
 
 > Observacao: o plano free do Render hiberna apos um periodo sem uso — a primeira
 > requisicao depois disso fica mais lenta (cold start).
 
-### Alternativas gratuitas
+### Variaveis de ambiente em producao
 
-- **Railway** (creditos mensais gratuitos; Postgres + app no mesmo projeto).
-- **Fly.io** (allowance gratuita; bom para containers Docker).
+- **Render**: `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGIN`, `NODE_ENV=production` (e credenciais Pluggy, se aplicavel).
+- **Vercel**: `VITE_API_URL=https://poupeazy-backend.onrender.com/api`.
 
 ---
 
