@@ -132,7 +132,9 @@ CREATE TABLE IF NOT EXISTS despesas (
     status        VARCHAR(20)   NOT NULL DEFAULT 'confirmada'
                   CONSTRAINT ck_despesas_status CHECK (status IN ('pendente', 'confirmada', 'cancelada')),
     nlp_metadata  JSONB,
-    criado_em     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    id_externo    VARCHAR(255),
+    criado_em     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_despesas_id_externo UNIQUE (id_orcamento, id_externo)
 );
 
 COMMENT ON TABLE despesas IS 'Transacoes financeiras. Suporta origem manual, Open Finance e ChatBot.';
@@ -255,9 +257,9 @@ BEGIN
 
     UPDATE metas m
     SET valor_atual = (
-        SELECT COALESCE(SUM(d.valor), 0.00)
+        SELECT COALESCE(SUM(CASE WHEN d.tipo = 'despesa' THEN d.valor ELSE -d.valor END), 0.00)
         FROM despesas d
-        WHERE d.id_metas = m.id AND d.status = 'confirmada' AND d.tipo = 'despesa'
+        WHERE d.id_metas = m.id AND d.status = 'confirmada'
     )
     WHERE m.id = ANY(v_ids_metas) AND m.id IS NOT NULL;
 

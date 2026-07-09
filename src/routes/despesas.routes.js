@@ -47,6 +47,7 @@ router.post('/', auth, async (req, res, next) => {
     origem,
     status,
     nlp_metadata,
+    id_externo,          
   } = req.body || {};
 
   if (!id_orcamento || !id_categoria || !valor || !data_transacao || !descricao || !tipo) {
@@ -62,22 +63,19 @@ router.post('/', auth, async (req, res, next) => {
 
     const { rows } = await db.query(
       `INSERT INTO despesas
-         (id_orcamento, id_categoria, id_metas, valor, data_transacao, descricao, tipo, origem, status, nlp_metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'manual'), COALESCE($9, 'confirmada'), $10)
+         (id_orcamento, id_categoria, id_metas, valor, data_transacao, descricao, tipo, origem, status, nlp_metadata, id_externo)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'manual'), COALESCE($9, 'confirmada'), $10, $11)
+      ON CONFLICT (id_orcamento, id_externo) DO NOTHING
        RETURNING *`,
       [
-        id_orcamento,
-        id_categoria,
-        id_metas ?? null,
-        valor,
-        data_transacao,
-        descricao,
-        tipo,
-        origem ?? null,
-        status ?? null,
-        nlp_metadata ?? null,
+        id_orcamento, id_categoria, id_metas ?? null, valor, data_transacao,
+        descricao, tipo, origem ?? null, status ?? null, nlp_metadata ?? null,
+        id_externo ?? null,
       ]
     );
+    if (!rows[0]) {
+      return res.status(200).json({ duplicado: true });
+    }
     return res.status(201).json(rows[0]);
   } catch (err) {
     return next(err);

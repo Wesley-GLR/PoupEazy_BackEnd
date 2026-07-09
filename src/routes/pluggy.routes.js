@@ -52,6 +52,7 @@ router.get('/transactions/:itemId', auth, async (req, res, next) => {
     const transactions = await client.fetchTransactions(accountId);
 
     const transacoesLimpas = transactions.results.map((tx) => ({
+      id_externo: tx.id,    
       descricao: tx.description,
       valor: Math.abs(tx.amount),
       tipo: tx.amount < 0 ? 'despesa' : 'receita',
