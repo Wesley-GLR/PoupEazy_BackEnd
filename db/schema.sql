@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
 );
 
 COMMENT ON TABLE usuarios IS 'Credenciais de autenticacao. Substitui auth.users do Supabase.';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usuarios_email_lower ON usuarios (LOWER(email));
 
 -- =============================================================================
 -- 1. TABELA: PROFILES (dados complementares do usuario)
@@ -99,26 +100,36 @@ CREATE TABLE IF NOT EXISTS categoria (
 COMMENT ON TABLE categoria IS 'Categorias de transacao. sistema=true sao nativas e protegidas.';
 COMMENT ON COLUMN categoria.id_usuario IS 'NULL = categoria do sistema, NOT NULL = personalizada do usuario.';
 
--- Categorias padrao do sistema (seed)
-INSERT INTO categoria (id_usuario, nome, tipo, icone, sistema) VALUES
-    (NULL, 'Alimentação',   'despesa_variavel', 'utensils',       TRUE),
-    (NULL, 'Transporte',    'despesa_variavel', 'car',            TRUE),
-    (NULL, 'Moradia',       'despesa_fixa',     'home',           TRUE),
-    (NULL, 'Saúde',         'despesa_variavel', 'heart-pulse',    TRUE),
-    (NULL, 'Lazer',         'despesa_variavel', 'music',          TRUE),
-    (NULL, 'Educação',      'despesa_variavel', 'book-open',      TRUE),
-    (NULL, 'Assinaturas',   'despesa_fixa',     'repeat',         TRUE),
-    (NULL, 'Outros',        'despesa_variavel', 'ellipsis',       TRUE),
-    (NULL, 'Salário',       'receita',          'briefcase',      TRUE),
-    (NULL, 'Freelance',     'receita',          'zap',            TRUE),
-    (NULL, 'Investimentos', 'receita',          'trending-up',    TRUE)
-ON CONFLICT DO NOTHING;
+-- Categorias padrao do sistema. O NOT EXISTS e necessario porque UNIQUE com
+-- id_usuario NULL nao considera dois NULLs iguais no PostgreSQL.
+WITH seeds(nome, tipo, icone) AS (VALUES
+    ('Alimentação',   'despesa_variavel', 'utensils'),
+    ('Transporte',    'despesa_variavel', 'car'),
+    ('Moradia',       'despesa_fixa',     'home'),
+    ('Saúde',         'despesa_variavel', 'heart-pulse'),
+    ('Lazer',         'despesa_variavel', 'music'),
+    ('Educação',      'despesa_variavel', 'book-open'),
+    ('Assinaturas',   'despesa_fixa',     'repeat'),
+    ('Outros',        'despesa_variavel', 'ellipsis'),
+    ('Salário',       'receita',          'briefcase'),
+    ('Freelance',     'receita',          'zap'),
+    ('Investimentos', 'receita',          'trending-up')
+)
+INSERT INTO categoria (id_usuario, nome, tipo, icone, sistema)
+SELECT NULL, s.nome, s.tipo, s.icone, TRUE
+FROM seeds s
+WHERE NOT EXISTS (
+    SELECT 1 FROM categoria c
+    WHERE c.id_usuario IS NULL AND c.sistema = TRUE
+      AND c.nome = s.nome AND c.tipo = s.tipo
+);
 
 -- =============================================================================
 -- 5. TABELA: DESPESAS (TRANSACOES)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS despesas (
     id            UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_integracao UUID,
     id_orcamento  UUID          NOT NULL REFERENCES orcamento(id) ON DELETE RESTRICT,
     id_categoria  UUID          NOT NULL REFERENCES categoria(id) ON DELETE RESTRICT,
     id_metas      UUID          REFERENCES metas(id) ON DELETE SET NULL,
@@ -157,6 +168,22 @@ CREATE TABLE IF NOT EXISTS open_finance_tokens (
 );
 
 COMMENT ON TABLE open_finance_tokens IS 'Tokens/conexoes das integracoes Open Finance (Pluggy).';
+
+-- A tabela de integracoes nasce depois de despesas; por isso a FK e aplicada aqui.
+ALTER TABLE despesas ADD COLUMN IF NOT EXISTS id_integracao UUID;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'despesas_id_integracao_fkey'
+    ) THEN
+        ALTER TABLE despesas
+            ADD CONSTRAINT despesas_id_integracao_fkey
+            FOREIGN KEY (id_integracao) REFERENCES open_finance_tokens(id) ON DELETE SET NULL;
+    END IF;
+END;
+$$;
+CREATE INDEX IF NOT EXISTS idx_despesas_integracao_externo
+    ON despesas (id_integracao, id_externo) WHERE id_integracao IS NOT NULL;
 
 -- =============================================================================
 -- 7. TABELA: NOTIFICACOES

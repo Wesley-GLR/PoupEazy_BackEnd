@@ -1,70 +1,67 @@
 const express = require('express');
-const { PluggyClient } = require('pluggy-sdk');
+const db = require('../db');
 const config = require('../config');
 const { auth } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
+const {
+  buildConnectTokenOptions,
+  fetchAllItemTransactions,
+  getOwnedIntegrationByItem,
+  getPluggyClient,
+  syncIntegration,
+} = require('../services/pluggy.service');
+const { validateUuid } = require('../utils/validation');
 
 const router = express.Router();
 
-// Inicializa o cliente Pluggy uma unica vez (lazy), reaproveitando o backend antigo.
-let pluggyClient = null;
-function getPluggyClient() {
-  if (!config.pluggy.clientId || !config.pluggy.clientSecret) {
-    throw new ApiError(500, 'Credenciais da Pluggy nao configuradas (PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET).');
-  }
-  if (!pluggyClient) {
-    pluggyClient = new PluggyClient({
-      clientId: config.pluggy.clientId,
-      clientSecret: config.pluggy.clientSecret,
-    });
-  }
-  return pluggyClient;
+function upstreamError(err, next, message) {
+  if (err instanceof ApiError) return next(err);
+  // eslint-disable-next-line no-console
+  console.error('[pluggy] Erro no provedor:', err);
+  return next(new ApiError(502, message, 'PLUGGY_UPSTREAM_ERROR'));
 }
 
-// GET /api/pluggy/token
-// O frontend pede permissao para abrir o Widget da Pluggy.
 router.get('/token', auth, async (req, res, next) => {
   try {
     const client = getPluggyClient();
-    const data = await client.createConnectToken();
+    const data = await client.createConnectToken(undefined, buildConnectTokenOptions(req.userId));
     return res.json({ connectToken: data.accessToken });
   } catch (err) {
-    if (err instanceof ApiError) return next(err);
-    // eslint-disable-next-line no-console
-    console.error('[pluggy] Erro ao gerar connect token:', err);
-    return next(new ApiError(500, 'Erro ao gerar token da Pluggy.'));
+    return upstreamError(err, next, 'Nao foi possivel iniciar a conexao bancaria.');
   }
 });
 
-// GET /api/pluggy/transactions/:itemId
-// Puxa o extrato da conta conectada e retorna transacoes ja normalizadas.
+// Contrato legado mantido para o frontend web, agora com verificacao de propriedade
+// e coleta de todas as contas/paginas. O app mobile usa o endpoint /sync abaixo.
 router.get('/transactions/:itemId', auth, async (req, res, next) => {
   try {
-    const client = getPluggyClient();
-    const { itemId } = req.params;
-
-    const accounts = await client.fetchAccounts(itemId);
-    if (accounts.results.length === 0) {
-      return res.json({ transactions: [] });
-    }
-
-    const accountId = accounts.results[0].id;
-    const transactions = await client.fetchTransactions(accountId);
-
-    const transacoesLimpas = transactions.results.map((tx) => ({
-      id_externo: tx.id,    
-      descricao: tx.description,
-      valor: Math.abs(tx.amount),
-      tipo: tx.amount < 0 ? 'despesa' : 'receita',
-      data: new Date(tx.date).toISOString().split('T')[0],
-    }));
-
-    return res.json({ transactions: transacoesLimpas });
+    await getOwnedIntegrationByItem(db, req.userId, req.params.itemId);
+    const result = await fetchAllItemTransactions(
+      getPluggyClient(),
+      req.params.itemId,
+      config.pluggy.syncMaxTransactions
+    );
+    return res.json({ transactions: result.transactions });
   } catch (err) {
-    if (err instanceof ApiError) return next(err);
-    // eslint-disable-next-line no-console
-    console.error('[pluggy] Erro ao buscar extrato:', err);
-    return next(new ApiError(500, 'Erro ao buscar extrato.'));
+    return upstreamError(err, next, 'Nao foi possivel consultar o extrato bancario.');
+  }
+});
+
+// Importa todo o extrato no servidor. O itemId nunca volta para o app e a gravacao
+// ocorre em uma transacao SQL, com orcamento do mes correto e deduplicacao.
+router.post('/sync/:integrationId', auth, async (req, res, next) => {
+  try {
+    const integrationId = validateUuid(req.params.integrationId, 'integrationId');
+    const result = await syncIntegration({
+      database: db,
+      client: getPluggyClient(),
+      userId: req.userId,
+      integrationId,
+      maxTransactions: config.pluggy.syncMaxTransactions,
+    });
+    return res.json(result);
+  } catch (err) {
+    return upstreamError(err, next, 'Nao foi possivel sincronizar as transacoes bancarias.');
   }
 });
 

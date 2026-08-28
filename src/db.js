@@ -7,13 +7,20 @@ const config = require('./config');
 // (formatDate, inputs <input type="date">, calculo de dias restantes).
 types.setTypeParser(1082, (value) => value);
 
-// Em provedores gerenciados (Neon, Render) a conexao normalmente exige SSL.
-// Em desenvolvimento local (docker) nao usamos SSL.
-const precisaSsl = !config.isDev || /sslmode=require/.test(config.databaseUrl || '');
+// SSL pode ser controlado explicitamente. O modo "auto" preserva o comportamento
+// esperado: usa SSL em producao ou quando a connection string o solicita, mas
+// respeita sslmode=disable para ambientes locais.
+const sslDesabilitadoNaUrl = /sslmode=disable/i.test(config.databaseUrl || '');
+const sslExigidoNaUrl = /sslmode=require/i.test(config.databaseUrl || '');
+const precisaSsl =
+  config.databaseSsl.mode === 'require' ||
+  (config.databaseSsl.mode === 'auto' && !sslDesabilitadoNaUrl && (!config.isDev || sslExigidoNaUrl));
 
 const pool = new Pool({
   connectionString: config.databaseUrl,
-  ssl: precisaSsl ? { rejectUnauthorized: false } : false,
+  ssl: precisaSsl
+    ? { rejectUnauthorized: config.databaseSsl.rejectUnauthorized }
+    : false,
 });
 
 pool.on('error', (err) => {

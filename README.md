@@ -9,6 +9,8 @@ Stack: **Node.js + Express + PostgreSQL + JWT**.
 - Autorizacao por dono: cada query filtra por `id_usuario` (substitui o RLS/`auth.uid()`).
 - Mesmas tabelas, triggers e views do projeto original (adaptados em `db/schema.sql`).
 - Rotas Pluggy reaproveitadas do backend antigo (`/api/pluggy/...`).
+- Itens Pluggy vinculados ao dono, DTOs sem tokens e sincronizacao atomica/idempotente.
+- Validacao de payloads, limite de corpo, headers seguros e rate limiting.
 
 ---
 
@@ -70,7 +72,7 @@ GET http://localhost:3001/api/health
 ### Alternativa: rodar tudo no Docker
 
 ```bash
-docker compose --profile api up --build
+docker compose up -d --build
 ```
 
 Sobe o banco **e** a API juntos. Lembre de exportar `PLUGGY_CLIENT_ID`/`PLUGGY_CLIENT_SECRET`
@@ -116,7 +118,8 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 | GET / POST | `/integracoes` | Conexoes Open Finance ativas / conectar banco |
 | DELETE | `/integracoes/:id` | Desconectar banco (ativo=false) |
 | GET | `/pluggy/token` | Gera connect token da Pluggy |
-| GET | `/pluggy/transactions/:itemId` | Extrato normalizado da conta |
+| GET | `/pluggy/transactions/:itemId` | Contrato web legado; exige item pertencente ao usuario |
+| POST | `/pluggy/sync/:integrationId` | Importa todas as contas/paginas de forma atomica e idempotente |
 | GET | `/relatorios/resumo-mensal` | View `vw_resumo_mensal` |
 | GET | `/relatorios/progresso-metas` | View `vw_progresso_metas` |
 | GET | `/relatorios/historico` | View `vw_historico_comparativo` |
@@ -124,6 +127,26 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 > Recuperacao de senha (modo dev): chame `POST /auth/forgot-password`, copie o
 > `resetToken` da resposta e use em `POST /auth/reset-password`. No frontend, o link
 > e `/redefinir-senha?token=SEU_TOKEN`.
+
+### Banco existente
+
+Antes de usar a sincronizacao mobile em um volume/banco criado anteriormente, aplique:
+
+```powershell
+Get-Content -Raw db\migrations\004_mobile_security_open_finance.sql |
+  docker compose exec -T db psql -v ON_ERROR_STOP=1 -U poupeazy -d poupeazy
+```
+
+Essa migration adiciona o vinculo entre transacao e integracao e o indice de e-mail normalizado. Ela nao apaga transacoes existentes.
+
+### Verificacoes automatizadas
+
+```bash
+npm test
+npm run check
+```
+
+Os testes cobrem validacao de e-mail/data/UUID/valores, normalizacao de transacoes, filtros/paginacao, DTO seguro de integracoes e regras de normalizacao da Pluggy.
 
 ---
 
@@ -179,10 +202,13 @@ PoupEazy_BackEnd/
 ├── scripts/
 │   └── init-db.js          # aplica o schema via `npm run db:init`
 └── src/
-    ├── server.js           # app Express + montagem das rotas
+    ├── app.js              # middlewares e montagem testavel das rotas
+    ├── server.js           # inicializacao do servidor HTTP
     ├── db.js               # pool do PostgreSQL
     ├── config.js           # variaveis de ambiente
     ├── middleware/         # auth (JWT) + tratamento de erros
+    ├── services/           # regras de transacoes e sincronizacao Pluggy
+    ├── utils/              # validadores de entrada compartilhados
     └── routes/             # auth, profile, metas, orcamentos, categorias,
                             # despesas, notificacoes, integracoes, pluggy, relatorios
 ```

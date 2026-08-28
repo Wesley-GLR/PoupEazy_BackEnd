@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Instala dependencias primeiro para aproveitar o cache de camadas.
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # Copia o restante do codigo.
 COPY . .

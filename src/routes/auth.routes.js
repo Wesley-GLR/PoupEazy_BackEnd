@@ -5,6 +5,7 @@ const db = require('../db');
 const config = require('../config');
 const { auth, gerarToken } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
+const { validateEmail, validateString } = require('../utils/validation');
 
 const router = express.Router();
 
@@ -13,28 +14,58 @@ function publicUser(u) {
   return { id: u.id, email: u.email, criado_em: u.criado_em };
 }
 
+function validatePassword(value, fieldName = 'password') {
+  if (typeof value !== 'string') {
+    throw new ApiError(400, `${fieldName} deve ser texto.`);
+  }
+  if (value.length < 6) {
+    throw new ApiError(422, 'A senha deve ter pelo menos 6 caracteres.');
+  }
+  // bcrypt considera apenas os primeiros 72 bytes; rejeitar evita senhas
+  // aparentemente diferentes que gerariam o mesmo hash.
+  if (Buffer.byteLength(value, 'utf8') > 72) {
+    throw new ApiError(422, 'A senha deve ter no maximo 72 bytes.');
+  }
+  return value;
+}
+
 // POST /api/auth/register
 // Cria usuario + profile em uma unica transacao (substitui o trigger handle_new_user).
 router.post('/register', async (req, res, next) => {
-  const { email, password, nome, telefone } = req.body || {};
+  const { password, nome, telefone } = req.body || {};
 
-  if (!email || !password) {
+  if (!req.body?.email || !password) {
     return next(new ApiError(400, 'email e password sao obrigatorios.'));
   }
-  if (String(password).length < 6) {
-    return next(new ApiError(400, 'A senha deve ter pelo menos 6 caracteres.'));
+
+  let email;
+  let senha;
+  let nomeNormalizado;
+  let telefoneNormalizado;
+  try {
+    email = validateEmail(req.body.email);
+    senha = validatePassword(password);
+    nomeNormalizado = nome == null ? '' : validateString(nome, 'nome', { max: 150, allowEmpty: true });
+    telefoneNormalizado = telefone == null
+      ? null
+      : validateString(telefone, 'telefone', { max: 20, allowEmpty: true }) || null;
+  } catch (err) {
+    return next(err);
   }
 
-  const client = await db.getClient();
+  let client;
+  let transactionStarted = false;
   try {
+    client = await db.getClient();
     await client.query('BEGIN');
+    transactionStarted = true;
 
-    const existe = await client.query('SELECT 1 FROM usuarios WHERE email = $1', [email]);
+    const existe = await client.query('SELECT 1 FROM usuarios WHERE LOWER(email) = $1', [email]);
     if (existe.rowCount > 0) {
       throw new ApiError(409, 'Ja existe uma conta com este e-mail.');
     }
 
-    const senhaHash = await bcrypt.hash(String(password), 10);
+    const senhaHash = await bcrypt.hash(senha, 10);
     const { rows: usuarioRows } = await client.query(
       'INSERT INTO usuarios (email, senha_hash) VALUES ($1, $2) RETURNING *',
       [email, senhaHash]
@@ -43,30 +74,43 @@ router.post('/register', async (req, res, next) => {
 
     const { rows: profileRows } = await client.query(
       'INSERT INTO profiles (id, nome, telefone) VALUES ($1, $2, $3) RETURNING *',
-      [usuario.id, nome || '', telefone || null]
+      [usuario.id, nomeNormalizado, telefoneNormalizado]
     );
 
     await client.query('COMMIT');
+    transactionStarted = false;
 
     const token = gerarToken(usuario);
     return res.status(201).json({ token, user: publicUser(usuario), profile: profileRows[0] });
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (client && transactionStarted) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        // eslint-disable-next-line no-console
+        console.error('[auth] Falha ao desfazer cadastro:', rollbackError);
+      }
+    }
     return next(err);
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
 // POST /api/auth/login
 router.post('/login', async (req, res, next) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
+  const { password } = req.body || {};
+  if (!req.body?.email || !password) {
     return next(new ApiError(400, 'email e password sao obrigatorios.'));
   }
 
   try {
-    const { rows } = await db.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+    const email = validateEmail(req.body.email);
+    // No login nao revelamos se a senha falhou em formato ou credencial.
+    if (typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 72) {
+      throw new ApiError(401, 'E-mail ou senha invalidos.');
+    }
+    const { rows } = await db.query('SELECT * FROM usuarios WHERE LOWER(email) = $1', [email]);
     const usuario = rows[0];
     if (!usuario) {
       throw new ApiError(401, 'E-mail ou senha invalidos.');
@@ -104,13 +148,13 @@ router.get('/me', auth, async (req, res, next) => {
 // Gera um token de reset valido por 1h. Em desenvolvimento, retorna o token no corpo
 // para testar via Postman (sem precisar de servidor de e-mail).
 router.post('/forgot-password', async (req, res, next) => {
-  const { email } = req.body || {};
-  if (!email) {
+  if (!req.body?.email) {
     return next(new ApiError(400, 'email e obrigatorio.'));
   }
 
   try {
-    const { rows } = await db.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+    const email = validateEmail(req.body.email);
+    const { rows } = await db.query('SELECT id FROM usuarios WHERE LOWER(email) = $1', [email]);
     const usuario = rows[0];
 
     // Mensagem generica sempre (nao revela se o e-mail existe).
@@ -146,21 +190,20 @@ router.post('/reset-password', async (req, res, next) => {
   if (!token || !novaSenha) {
     return next(new ApiError(400, 'token e novaSenha sao obrigatorios.'));
   }
-  if (String(novaSenha).length < 6) {
-    return next(new ApiError(400, 'A senha deve ter pelo menos 6 caracteres.'));
-  }
 
   try {
+    const tokenNormalizado = validateString(token, 'token', { max: 128 });
+    const senha = validatePassword(novaSenha, 'novaSenha');
     const { rows } = await db.query(
       'SELECT * FROM usuarios WHERE reset_token = $1 AND reset_expira_em > NOW()',
-      [token]
+      [tokenNormalizado]
     );
     const usuario = rows[0];
     if (!usuario) {
       throw new ApiError(400, 'Token de recuperacao invalido ou expirado.');
     }
 
-    const senhaHash = await bcrypt.hash(String(novaSenha), 10);
+    const senhaHash = await bcrypt.hash(senha, 10);
     await db.query(
       'UPDATE usuarios SET senha_hash = $1, reset_token = NULL, reset_expira_em = NULL WHERE id = $2',
       [senhaHash, usuario.id]
@@ -178,12 +221,10 @@ router.patch('/password', auth, async (req, res, next) => {
   if (!novaSenha) {
     return next(new ApiError(400, 'novaSenha e obrigatoria.'));
   }
-  if (String(novaSenha).length < 6) {
-    return next(new ApiError(400, 'A senha deve ter pelo menos 6 caracteres.'));
-  }
 
   try {
-    const senhaHash = await bcrypt.hash(String(novaSenha), 10);
+    const senha = validatePassword(novaSenha, 'novaSenha');
+    const senhaHash = await bcrypt.hash(senha, 10);
     await db.query('UPDATE usuarios SET senha_hash = $1 WHERE id = $2', [senhaHash, req.userId]);
     return res.json({ message: 'Senha atualizada com sucesso.' });
   } catch (err) {
@@ -192,3 +233,4 @@ router.patch('/password', auth, async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.validatePassword = validatePassword;

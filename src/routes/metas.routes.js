@@ -2,6 +2,14 @@ const express = require('express');
 const db = require('../db');
 const { auth } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
+const {
+  hasOwn,
+  validateDateOnly,
+  validateEnum,
+  validatePositiveMoney,
+  validateString,
+  validateUuid,
+} = require('../utils/validation');
 
 const router = express.Router();
 
@@ -21,15 +29,22 @@ router.get('/', auth, async (req, res, next) => {
 // POST /api/metas
 router.post('/', auth, async (req, res, next) => {
   const { nome, descricao, valor_objetivo, data_limite, status } = req.body || {};
-  if (!nome || !data_limite) {
-    return next(new ApiError(400, 'nome e data_limite sao obrigatorios.'));
+  if (!nome || valor_objetivo == null || !data_limite) {
+    return next(new ApiError(400, 'nome, valor_objetivo e data_limite sao obrigatorios.'));
   }
   try {
+    const values = {
+      nome: validateString(nome, 'nome', { max: 100 }),
+      descricao: descricao == null ? null : validateString(descricao, 'descricao', { max: 2000, allowEmpty: true }) || null,
+      valorObjetivo: validatePositiveMoney(valor_objetivo, 'valor_objetivo'),
+      dataLimite: validateDateOnly(data_limite, 'data_limite'),
+      status: status == null ? 'ativa' : validateEnum(status, ['ativa', 'concluida', 'cancelada'], 'status'),
+    };
     const { rows } = await db.query(
       `INSERT INTO metas (id_usuario, nome, descricao, valor_objetivo, data_limite, status)
-       VALUES ($1, $2, $3, COALESCE($4, 0), $5, COALESCE($6, 'ativa'))
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [req.userId, nome, descricao ?? null, valor_objetivo ?? null, data_limite, status ?? null]
+      [req.userId, values.nome, values.descricao, values.valorObjetivo, values.dataLimite, values.status]
     );
     return res.status(201).json(rows[0]);
   } catch (err) {
@@ -39,18 +54,47 @@ router.post('/', auth, async (req, res, next) => {
 
 // PATCH /api/metas/:id
 router.patch('/:id', auth, async (req, res, next) => {
-  const { nome, descricao, valor_objetivo, data_limite, status } = req.body || {};
+  const body = req.body || {};
   try {
+    validateUuid(req.params.id, 'id');
+    const fields = ['nome', 'descricao', 'valor_objetivo', 'data_limite', 'status'];
+    if (!fields.some((field) => hasOwn(body, field))) {
+      throw new ApiError(400, 'Informe ao menos um campo para atualizar.');
+    }
+
+    const nome = hasOwn(body, 'nome') ? validateString(body.nome, 'nome', { max: 100 }) : null;
+    const descricao = hasOwn(body, 'descricao')
+      ? body.descricao == null
+        ? null
+        : validateString(body.descricao, 'descricao', { max: 2000, allowEmpty: true }) || null
+      : null;
+    const valorObjetivo = hasOwn(body, 'valor_objetivo')
+      ? validatePositiveMoney(body.valor_objetivo, 'valor_objetivo')
+      : null;
+    const dataLimite = hasOwn(body, 'data_limite')
+      ? validateDateOnly(body.data_limite, 'data_limite')
+      : null;
+    const status = hasOwn(body, 'status')
+      ? validateEnum(body.status, ['ativa', 'concluida', 'cancelada'], 'status')
+      : null;
+
     const { rows } = await db.query(
       `UPDATE metas
-         SET nome = COALESCE($1, nome),
-             descricao = COALESCE($2, descricao),
-             valor_objetivo = COALESCE($3, valor_objetivo),
-             data_limite = COALESCE($4, data_limite),
-             status = COALESCE($5, status)
-       WHERE id = $6 AND id_usuario = $7
+         SET nome = CASE WHEN $1 THEN $2 ELSE nome END,
+             descricao = CASE WHEN $3 THEN $4 ELSE descricao END,
+             valor_objetivo = CASE WHEN $5 THEN $6 ELSE valor_objetivo END,
+             data_limite = CASE WHEN $7 THEN $8 ELSE data_limite END,
+             status = CASE WHEN $9 THEN $10 ELSE status END
+       WHERE id = $11 AND id_usuario = $12
        RETURNING *`,
-      [nome ?? null, descricao ?? null, valor_objetivo ?? null, data_limite ?? null, status ?? null, req.params.id, req.userId]
+      [
+        hasOwn(body, 'nome'), nome,
+        hasOwn(body, 'descricao'), descricao,
+        hasOwn(body, 'valor_objetivo'), valorObjetivo,
+        hasOwn(body, 'data_limite'), dataLimite,
+        hasOwn(body, 'status'), status,
+        req.params.id, req.userId,
+      ]
     );
     if (!rows[0]) throw new ApiError(404, 'Meta nao encontrada.');
     return res.json(rows[0]);
@@ -62,6 +106,7 @@ router.patch('/:id', auth, async (req, res, next) => {
 // DELETE /api/metas/:id
 router.delete('/:id', auth, async (req, res, next) => {
   try {
+    validateUuid(req.params.id, 'id');
     const { rowCount } = await db.query(
       'DELETE FROM metas WHERE id = $1 AND id_usuario = $2',
       [req.params.id, req.userId]

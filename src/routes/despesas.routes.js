@@ -2,135 +2,115 @@ const express = require('express');
 const db = require('../db');
 const { auth } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
+const { hasOwn, validateUuid } = require('../utils/validation');
+const {
+  buildExpensesListQuery,
+  normalizeTransactionBody,
+  validateTransactionReferences,
+} = require('../services/despesas.service');
 
 const router = express.Router();
 
-// Confere se o orcamento informado pertence ao usuario logado.
-async function orcamentoDoUsuario(idOrcamento, userId) {
-  const { rows } = await db.query(
-    'SELECT 1 FROM orcamento WHERE id = $1 AND id_usuario = $2',
-    [idOrcamento, userId]
-  );
-  return rows.length > 0;
-}
-
-// GET /api/despesas
-// Espelha o hook useTransactions: despesas dos orcamentos do usuario,
-// ja com a categoria aninhada (campo "categoria") e ordenadas por data desc.
+// Sem page/limit, preserva o contrato historico e retorna um array. Quando page
+// ou limit e informado, retorna { data, pagination } para o app mobile.
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { rows } = await db.query(
-      `SELECT d.*, row_to_json(c.*) AS categoria
-         FROM despesas d
-         JOIN categoria c ON c.id = d.id_categoria
-         JOIN orcamento o ON o.id = d.id_orcamento
-        WHERE o.id_usuario = $1
-        ORDER BY d.data_transacao DESC, d.criado_em DESC`,
-      [req.userId]
-    );
-    return res.json(rows);
+    const query = buildExpensesListQuery(req.userId, req.query);
+    const { rows } = await db.query(query.selectSql, query.selectValues);
+    if (!query.paginated) return res.json(rows);
+
+    const { rows: countRows } = await db.query(query.countSql, query.values);
+    const total = Number(countRows[0]?.total || 0);
+    res.set('X-Total-Count', String(total));
+    return res.json({
+      data: rows,
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.ceil(total / query.limit),
+      },
+    });
   } catch (err) {
     return next(err);
   }
 });
 
-// POST /api/despesas
 router.post('/', auth, async (req, res, next) => {
-  const {
-    id_orcamento,
-    id_categoria,
-    id_metas,
-    valor,
-    data_transacao,
-    descricao,
-    tipo,
-    origem,
-    status,
-    nlp_metadata,
-    id_externo,          
-  } = req.body || {};
-
-  if (!id_orcamento || !id_categoria || !valor || !data_transacao || !descricao || !tipo) {
-    return next(
-      new ApiError(400, 'id_orcamento, id_categoria, valor, data_transacao, descricao e tipo sao obrigatorios.')
-    );
-  }
-
   try {
-    if (!(await orcamentoDoUsuario(id_orcamento, req.userId))) {
-      throw new ApiError(403, 'Orcamento nao pertence ao usuario.');
-    }
+    const transaction = normalizeTransactionBody(req.body);
+    await validateTransactionReferences(db, req.userId, transaction);
 
     const { rows } = await db.query(
       `INSERT INTO despesas
-         (id_orcamento, id_categoria, id_metas, valor, data_transacao, descricao, tipo, origem, status, nlp_metadata, id_externo)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'manual'), COALESCE($9, 'confirmada'), $10, $11)
-      ON CONFLICT (id_orcamento, id_externo) DO NOTHING
+         (id_orcamento, id_categoria, id_metas, valor, data_transacao, descricao,
+          tipo, origem, status, nlp_metadata, id_externo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id_orcamento, id_externo) DO NOTHING
        RETURNING *`,
       [
-        id_orcamento, id_categoria, id_metas ?? null, valor, data_transacao,
-        descricao, tipo, origem ?? null, status ?? null, nlp_metadata ?? null,
-        id_externo ?? null,
+        transaction.id_orcamento, transaction.id_categoria, transaction.id_metas,
+        transaction.valor, transaction.data_transacao, transaction.descricao,
+        transaction.tipo, transaction.origem, transaction.status,
+        transaction.nlp_metadata, transaction.id_externo,
       ]
     );
-    if (!rows[0]) {
-      return res.status(200).json({ duplicado: true });
-    }
+    if (!rows[0]) return res.status(200).json({ duplicado: true });
     return res.status(201).json(rows[0]);
   } catch (err) {
     return next(err);
   }
 });
 
-// PATCH /api/despesas/:id
 router.patch('/:id', auth, async (req, res, next) => {
-  const {
-    id_orcamento,
-    id_categoria,
-    id_metas,
-    valor,
-    data_transacao,
-    descricao,
-    tipo,
-    origem,
-    status,
-    nlp_metadata,
-  } = req.body || {};
-
   try {
-    // Se trocar o orcamento, valida que o novo tambem pertence ao usuario.
-    if (id_orcamento && !(await orcamentoDoUsuario(id_orcamento, req.userId))) {
-      throw new ApiError(403, 'Orcamento nao pertence ao usuario.');
-    }
+    validateUuid(req.params.id, 'id');
+    const patch = normalizeTransactionBody(req.body, { partial: true });
 
+    const { rows: existingRows } = await db.query(
+      `SELECT d.*
+         FROM despesas d
+         JOIN orcamento o ON o.id = d.id_orcamento
+        WHERE d.id = $1 AND o.id_usuario = $2`,
+      [req.params.id, req.userId]
+    );
+    const existing = existingRows[0];
+    if (!existing) throw new ApiError(404, 'Transacao nao encontrada.');
+
+    const effective = { ...existing, ...patch };
+    const changesGoalBalance = ['id_metas', 'valor', 'tipo', 'status'].some((field) => hasOwn(patch, field));
+    await validateTransactionReferences(db, req.userId, effective, {
+      requireActiveMeta: changesGoalBalance,
+    });
+
+    const present = (field) => hasOwn(patch, field);
     const { rows } = await db.query(
       `UPDATE despesas
-         SET id_orcamento = COALESCE($1, id_orcamento),
-             id_categoria = COALESCE($2, id_categoria),
-             id_metas = COALESCE($3, id_metas),
-             valor = COALESCE($4, valor),
-             data_transacao = COALESCE($5, data_transacao),
-             descricao = COALESCE($6, descricao),
-             tipo = COALESCE($7, tipo),
-             origem = COALESCE($8, origem),
-             status = COALESCE($9, status),
-             nlp_metadata = COALESCE($10, nlp_metadata)
-       WHERE id = $11
-         AND id_orcamento IN (SELECT id FROM orcamento WHERE id_usuario = $12)
-       RETURNING *`,
+          SET id_orcamento = CASE WHEN $1 THEN $2 ELSE id_orcamento END,
+              id_categoria = CASE WHEN $3 THEN $4 ELSE id_categoria END,
+              id_metas = CASE WHEN $5 THEN $6 ELSE id_metas END,
+              valor = CASE WHEN $7 THEN $8 ELSE valor END,
+              data_transacao = CASE WHEN $9 THEN $10 ELSE data_transacao END,
+              descricao = CASE WHEN $11 THEN $12 ELSE descricao END,
+              tipo = CASE WHEN $13 THEN $14 ELSE tipo END,
+              origem = CASE WHEN $15 THEN $16 ELSE origem END,
+              status = CASE WHEN $17 THEN $18 ELSE status END,
+              nlp_metadata = CASE WHEN $19 THEN $20 ELSE nlp_metadata END
+        WHERE id = $21
+          AND id_orcamento IN (SELECT id FROM orcamento WHERE id_usuario = $22)
+        RETURNING *`,
       [
-        id_orcamento ?? null,
-        id_categoria ?? null,
-        id_metas ?? null,
-        valor ?? null,
-        data_transacao ?? null,
-        descricao ?? null,
-        tipo ?? null,
-        origem ?? null,
-        status ?? null,
-        nlp_metadata ?? null,
-        req.params.id,
-        req.userId,
+        present('id_orcamento'), patch.id_orcamento ?? null,
+        present('id_categoria'), patch.id_categoria ?? null,
+        present('id_metas'), patch.id_metas ?? null,
+        present('valor'), patch.valor ?? null,
+        present('data_transacao'), patch.data_transacao ?? null,
+        present('descricao'), patch.descricao ?? null,
+        present('tipo'), patch.tipo ?? null,
+        present('origem'), patch.origem ?? null,
+        present('status'), patch.status ?? null,
+        present('nlp_metadata'), patch.nlp_metadata ?? null,
+        req.params.id, req.userId,
       ]
     );
     if (!rows[0]) throw new ApiError(404, 'Transacao nao encontrada.');
@@ -140,9 +120,9 @@ router.patch('/:id', auth, async (req, res, next) => {
   }
 });
 
-// DELETE /api/despesas/:id
 router.delete('/:id', auth, async (req, res, next) => {
   try {
+    validateUuid(req.params.id, 'id');
     const { rowCount } = await db.query(
       `DELETE FROM despesas
         WHERE id = $1

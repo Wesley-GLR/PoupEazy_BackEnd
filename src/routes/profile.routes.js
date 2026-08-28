@@ -2,10 +2,10 @@ const express = require('express');
 const db = require('../db');
 const { auth } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
+const { hasOwn, validateString } = require('../utils/validation');
 
 const router = express.Router();
 
-// GET /api/profile
 router.get('/', auth, async (req, res, next) => {
   try {
     const { rows } = await db.query('SELECT * FROM profiles WHERE id = $1', [req.userId]);
@@ -16,17 +16,27 @@ router.get('/', auth, async (req, res, next) => {
   }
 });
 
-// PATCH /api/profile  { nome?, telefone? }
 router.patch('/', auth, async (req, res, next) => {
-  const { nome, telefone } = req.body || {};
   try {
+    const body = req.body || {};
+    if (!hasOwn(body, 'nome') && !hasOwn(body, 'telefone')) {
+      throw new ApiError(400, 'Informe nome ou telefone para atualizar.');
+    }
+    const nome = hasOwn(body, 'nome')
+      ? validateString(body.nome, 'nome', { max: 150 })
+      : null;
+    const telefone = hasOwn(body, 'telefone')
+      ? body.telefone == null
+        ? null
+        : validateString(body.telefone, 'telefone', { max: 20, allowEmpty: true }) || null
+      : null;
     const { rows } = await db.query(
       `UPDATE profiles
-         SET nome = COALESCE($1, nome),
-             telefone = COALESCE($2, telefone)
-       WHERE id = $3
-       RETURNING *`,
-      [nome ?? null, telefone ?? null, req.userId]
+          SET nome = CASE WHEN $1 THEN $2 ELSE nome END,
+              telefone = CASE WHEN $3 THEN $4 ELSE telefone END
+        WHERE id = $5
+        RETURNING *`,
+      [hasOwn(body, 'nome'), nome, hasOwn(body, 'telefone'), telefone, req.userId]
     );
     if (!rows[0]) throw new ApiError(404, 'Profile nao encontrado.');
     return res.json(rows[0]);
