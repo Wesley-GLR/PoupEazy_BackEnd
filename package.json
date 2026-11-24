@@ -13,12 +13,14 @@
     "test": "node --test --test-concurrency=1",
     "check": "npm test && npm audit --audit-level=high",
     "db:init": "node scripts/init-db.js",
+    "db:migrate:whatsapp": "node scripts/migrate-whatsapp.js",
     "up": "docker compose up -d --build",
     "down": "docker compose down",
     "reset": "docker compose down -v",
     "logs": "docker compose logs -f api"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.1.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

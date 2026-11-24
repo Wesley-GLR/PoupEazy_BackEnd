@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { auth } = require('../middleware/auth');
+const { getOrCreateBudget } = require('../services/orcamentos.service');
 const { ApiError } = require('../middleware/errorHandler');
 const {
   hasOwn,
@@ -60,15 +61,9 @@ router.post('/', auth, async (req, res, next) => {
 router.post('/get-or-create', auth, async (req, res, next) => {
   try {
     const budget = normalizeBudget(req.body);
-    const { rows } = await db.query(
-      `INSERT INTO orcamento (id_usuario, mes, ano, valor_planejado)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (id_usuario, mes, ano)
-       DO UPDATE SET id_usuario = EXCLUDED.id_usuario
-       RETURNING *`,
-      [req.userId, budget.mes, budget.ano, budget.valor_planejado ?? 0]
-    );
-    return res.json(rows[0]);
+    return res.json(await getOrCreateBudget(db, req.userId, {
+      mes: budget.mes, ano: budget.ano, valorPlanejado: budget.valor_planejado,
+    }));
   } catch (err) {
     return next(err);
   }

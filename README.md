@@ -5,6 +5,8 @@ e ja incorpora a integracao Open Finance (Pluggy).
 
 Stack: **Node.js + Express + PostgreSQL + JWT**.
 
+Para o RF02, consulte o [guia da demonstração do WhatsApp](WHATSAPP_DEMO.md).
+
 - Autenticacao via JWT (bcrypt para hash de senha) no lugar do Supabase Auth.
 - Autorizacao por dono: cada query filtra por `id_usuario` (substitui o RLS/`auth.uid()`).
 - Mesmas tabelas, triggers e views do projeto original (adaptados em `db/schema.sql`).
