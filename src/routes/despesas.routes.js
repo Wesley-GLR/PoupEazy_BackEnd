@@ -5,6 +5,7 @@ const { ApiError } = require('../middleware/errorHandler');
 const { hasOwn, validateUuid } = require('../utils/validation');
 const {
   buildExpensesListQuery,
+  createTransaction,
   normalizeTransactionBody,
   validateTransactionReferences,
 } = require('../services/despesas.service');
@@ -38,25 +39,9 @@ router.get('/', auth, async (req, res, next) => {
 
 router.post('/', auth, async (req, res, next) => {
   try {
-    const transaction = normalizeTransactionBody(req.body);
-    await validateTransactionReferences(db, req.userId, transaction);
-
-    const { rows } = await db.query(
-      `INSERT INTO despesas
-         (id_orcamento, id_categoria, id_metas, valor, data_transacao, descricao,
-          tipo, origem, status, nlp_metadata, id_externo)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (id_orcamento, id_externo) DO NOTHING
-       RETURNING *`,
-      [
-        transaction.id_orcamento, transaction.id_categoria, transaction.id_metas,
-        transaction.valor, transaction.data_transacao, transaction.descricao,
-        transaction.tipo, transaction.origem, transaction.status,
-        transaction.nlp_metadata, transaction.id_externo,
-      ]
-    );
-    if (!rows[0]) return res.status(200).json({ duplicado: true });
-    return res.status(201).json(rows[0]);
+    const transaction = await createTransaction(db, req.userId, req.body);
+    if (!transaction) return res.status(200).json({ duplicado: true });
+    return res.status(201).json(transaction);
   } catch (err) {
     return next(err);
   }

@@ -7,6 +7,9 @@ DROP VIEW IF EXISTS vw_historico_comparativo CASCADE;
 DROP VIEW IF EXISTS vw_progresso_metas CASCADE;
 DROP VIEW IF EXISTS vw_resumo_mensal CASCADE;
 
+DROP TABLE IF EXISTS whatsapp_mensagens;
+DROP TABLE IF EXISTS whatsapp_codigos;
+DROP TABLE IF EXISTS whatsapp_vinculos;
 DROP TABLE IF EXISTS notificacoes CASCADE;
 DROP TABLE IF EXISTS open_finance_tokens CASCADE;
 DROP TABLE IF EXISTS despesas CASCADE;

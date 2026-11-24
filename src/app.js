@@ -15,8 +15,9 @@ const notificacoesRoutes = require('./routes/notificacoes.routes');
 const integracoesRoutes = require('./routes/integracoes.routes');
 const pluggyRoutes = require('./routes/pluggy.routes');
 const relatoriosRoutes = require('./routes/relatorios.routes');
+const { createWebhookRouter, createLinkRouter } = require('./routes/whatsapp.routes');
 
-function createApp() {
+function createApp({ sendWhatsAppText } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -28,6 +29,10 @@ function createApp() {
 
   app.use(helmet());
   app.use(cors({ origin: origins }));
+  // O webhook precisa do corpo bruto para conferir a assinatura da Meta.
+  if (config.whatsapp.enabled) {
+    app.use('/api/whatsapp/webhook', createWebhookRouter(config.whatsapp, sendWhatsAppText));
+  }
   app.use(express.json({ limit: config.jsonBodyLimit }));
 
   if (!config.isTest) {
@@ -61,6 +66,7 @@ function createApp() {
   app.use('/api/integracoes', integracoesRoutes);
   app.use('/api/pluggy', pluggyRoutes);
   app.use('/api/relatorios', relatoriosRoutes);
+  app.use('/api/whatsapp', createLinkRouter(config.whatsapp));
 
   app.use(notFound);
   app.use(errorHandler);

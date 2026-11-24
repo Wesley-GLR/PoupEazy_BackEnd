@@ -137,6 +137,27 @@ async function validateTransactionReferences(queryable, userId, transaction, opt
   return { budget, category };
 }
 
+async function createTransaction(queryable, userId, body) {
+  const transaction = normalizeTransactionBody(body);
+  await validateTransactionReferences(queryable, userId, transaction);
+
+  const { rows } = await queryable.query(
+    `INSERT INTO despesas
+       (id_orcamento, id_categoria, id_metas, valor, data_transacao, descricao,
+        tipo, origem, status, nlp_metadata, id_externo)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (id_orcamento, id_externo) DO NOTHING
+     RETURNING *`,
+    [
+      transaction.id_orcamento, transaction.id_categoria, transaction.id_metas,
+      transaction.valor, transaction.data_transacao, transaction.descricao,
+      transaction.tipo, transaction.origem, transaction.status,
+      transaction.nlp_metadata, transaction.id_externo,
+    ]
+  );
+  return rows[0];
+}
+
 function getSingleQueryValue(query, name) {
   const value = query[name];
   if (Array.isArray(value) || (value != null && typeof value !== 'string')) {
@@ -209,6 +230,7 @@ module.exports = {
   TRANSACTION_STATUSES,
   TRANSACTION_TYPES,
   buildExpensesListQuery,
+  createTransaction,
   normalizeTransactionBody,
   validateTransactionReferences,
 };

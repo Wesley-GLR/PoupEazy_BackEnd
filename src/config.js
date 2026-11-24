@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const whatsappProvider = process.env.WHATSAPP_PROVIDER || 'meta';
+
 // Centraliza a leitura e validacao das variaveis de ambiente.
 // Falhar cedo (no boot) e melhor do que descobrir uma var faltando no meio de uma requisicao.
 const config = {
@@ -19,6 +21,23 @@ const config = {
   databaseSsl: {
     mode: (process.env.DATABASE_SSL || 'auto').toLowerCase(),
     rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true',
+  },
+  whatsapp: {
+    provider: whatsappProvider,
+    enabled: process.env.WHATSAPP_ENABLED === 'true',
+    apiVersion: process.env.WHATSAPP_API_VERSION || 'v23.0',
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    botNumber: whatsappProvider === 'vonage_sandbox'
+      ? process.env.VONAGE_WHATSAPP_NUMBER
+      : process.env.WHATSAPP_BOT_NUMBER,
+    apiKey: process.env.VONAGE_API_KEY,
+    apiSecret: process.env.VONAGE_API_SECRET,
+    signatureSecret: process.env.VONAGE_SIGNATURE_SECRET,
+    mediaBaseUrl: process.env.VONAGE_MEDIA_BASE_URL || null,
+    testRecipient: process.env.WHATSAPP_TEST_RECIPIENT_BR || null,
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
+    appSecret: process.env.WHATSAPP_APP_SECRET,
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
   },
   pluggy: {
     clientId: process.env.PLUGGY_CLIENT_ID,
@@ -52,6 +71,24 @@ if (config.nodeEnv === 'production' && Buffer.byteLength(config.jwtSecret, 'utf8
   // eslint-disable-next-line no-console
   console.error('[config] JWT_SECRET deve ter pelo menos 32 bytes em producao.');
   process.exit(1);
+}
+
+if (config.whatsapp.enabled) {
+  const {
+    provider, botNumber, testRecipient, apiVersion, phoneNumberId, accessToken, appSecret, verifyToken,
+    apiKey, apiSecret, signatureSecret, mediaBaseUrl,
+  } = config.whatsapp;
+  const commonInvalid = !/^[1-9]\d{6,14}$/.test(botNumber)
+    || (testRecipient && !/^55[1-9]\d9\d{8}$/.test(testRecipient));
+  const metaInvalid = !/^v\d+\.\d+$/.test(apiVersion) || !/^\d{1,32}$/.test(phoneNumberId)
+    || !accessToken || !appSecret || !verifyToken;
+  const vonageInvalid = !apiKey || !apiSecret || !signatureSecret
+    || (mediaBaseUrl && !/^https:\/\/[a-z0-9.-]+\/?$/i.test(mediaBaseUrl));
+  if (commonInvalid || !['meta', 'vonage_sandbox'].includes(provider)
+      || (provider === 'meta' && metaInvalid) || (provider === 'vonage_sandbox' && vonageInvalid)) {
+    console.error('[config] Revise as variáveis de WhatsApp em .env.example.');
+    process.exit(1);
+  }
 }
 
 module.exports = config;
