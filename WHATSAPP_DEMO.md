@@ -1,6 +1,6 @@
 # Demonstração do PoupEazy no WhatsApp
 
-O bot usa o mesmo modelo de transações da API Express e PostgreSQL do PoupEazy. A demonstração roda com o backend, o banco e o site locais. O beta da Play Store continua usando a API publicada no Render.
+O bot usa o mesmo modelo de transações da API Express e PostgreSQL do PoupEazy. A demonstração pode rodar localmente ou com a API publicada no Render. O site e o beta Android usam o mesmo vínculo quando apontam para essa API.
 
 ## Alternativa gratuita com Vonage
 
@@ -20,6 +20,8 @@ Para voltar ao fluxo da Meta, selecione `WHATSAPP_PROVIDER=meta` e reinicie a AP
 3. No Sandbox da Vonage, informe os callbacks da API publicada, `/api/whatsapp/webhook` e `/api/whatsapp/webhook/status`. O processo principal `npm start` atende esses caminhos. Os callbacks precisam de assinatura JWT habilitada na Vonage.
 4. Publique o site com `VITE_API_URL` apontando para a API publicada, incluindo `/api`. Gere a nova beta Android com `EXPO_PUBLIC_API_URL` apontando para essa mesma API e distribua-a na faixa de testes da Play Store.
 5. Cada participante deve aderir ao Sandbox da Vonage e vincular o próprio número em uma conta PoupEazy. Confira com duas contas o registro após `sim`, os quatro relatórios e o isolamento dos dados. O Sandbox tem limite compartilhado de 100 mensagens por mês.
+
+O gerador de PNG usa fontes incluídas no backend. Se uma imagem chegar com os cartões visíveis e o texto ausente, confirme no Render que o deploy inclui a [correção de fontes](https://github.com/Wesley-GLR/PoupEazy_BackEnd/pull/3) e peça um novo relatório no WhatsApp. A correção de fontes dispensa migração e nova build do app.
 
 As imagens dos relatórios ficam na memória de uma instância da API por dez minutos. Reiniciar a instância antes de a Vonage buscar a imagem pode interromper sua entrega. Para a demonstração com gráficos, mantenha uma instância atendendo o webhook e a mídia na mesma origem. O envio em texto funciona quando `VONAGE_MEDIA_BASE_URL` está vazio.
 
@@ -83,7 +85,7 @@ npm run dev
 ## Roteiro da apresentação
 
 1. Crie uma conta de teste no site local. Abra **Transações → Registrar via WhatsApp → Gerar link de vínculo**.
-2. Abra o link e envie a mensagem preparada pelo celular verificado na Meta. No site, clique em **Já enviei a mensagem**.
+2. Abra o link e envie a mensagem preparada pelo celular autorizado no provedor escolhido. No PoupEazy, clique em **Já enviei a mensagem**.
 3. No WhatsApp, mande `cabelo 35` e responda `sim`. O gasto usa a categoria **Outros** e a data da mensagem no horário de Brasília. Também funcionam `35 cabelo`, `café R$ 12,50` e valores com ponto nos centavos.
 4. Reabra ou atualize **Transações** e mostre a despesa com a etiqueta **WhatsApp**. Mostre `cancelar` em uma segunda despesa para demonstrar que só o gasto confirmado entra no extrato.
 5. Envie `relatório semanal` para receber entradas, gastos, saldo do período e as três categorias com maior gasto. A Vonage envia o gráfico em PNG quando a URL de mídia está configurada. Nos demais casos, o bot envia barras em texto. Também há `relatório diário`, `relatório mensal` e `relatório total`. Semana e mês seguem o calendário local e o resumo soma transações confirmadas até hoje.
