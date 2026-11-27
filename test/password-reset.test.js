@@ -12,6 +12,7 @@ const db = require('../src/db');
 const { createApp } = require('../src/app');
 const { gerarToken } = require('../src/middleware/auth');
 const { readPasswordResetUrl, GmailEmailError } = require('../src/config/email');
+const { passwordChangedEmail } = require('../src/emails/password-changed');
 
 const password = 'SyntheticPassword123!';
 const newPassword = 'NewSyntheticPassword123!';
@@ -44,7 +45,7 @@ function accountStore() {
         user.senha_hash = hash;
         user.reset_token = null;
         user.reset_expira_em = null;
-        return { rows: [{ id: user.id }], rowCount: 1 };
+        return { rows: [{ id: user.id, email: user.email }], rowCount: 1 };
       }
       if (sql === 'SELECT id, senha_hash, email_verificado_em, email_verificacao_obrigatoria FROM usuarios WHERE id = $1') return { rows: [{ ...user }], rowCount: 1 };
       if (sql.startsWith('SELECT * FROM usuarios WHERE LOWER(email)')) return { rows: [{ ...user }], rowCount: 1 };
@@ -160,6 +161,8 @@ test('RESET-05 consumo concorrente funciona uma vez e revoga senha e JWT antigos
     request('/auth/reset-password', { token, novaSenha: newPassword }),
   ]);
   assert.deepEqual(results.map((result) => result.status).sort(), [200, 400]);
+  await settle();
+  assert.equal(messages.filter((message) => message.subject === 'Sua senha do PoupEazy foi alterada').length, 1);
   assert.equal(results.find((result) => result.status === 400).body.code, 'RESET_TOKEN_INVALID');
   assert.deepEqual(Object.keys(results.find((result) => result.status === 200).body), ['message']);
   assert.equal(store.user.reset_token, null);
@@ -169,6 +172,9 @@ test('RESET-05 consumo concorrente funciona uma vez e revoga senha e JWT antigos
   assert.equal((await request('/metas', undefined, gerarToken(store.user), 'GET')).status, 200);
   assert.equal((await request('/auth/login', { email: store.user.email, password })).status, 401);
   assert.equal((await request('/auth/login', { email: store.user.email, password: newPassword })).status, 200);
+  await request('/auth/reset-password', { token, novaSenha: newPassword });
+  await settle();
+  assert.equal(messages.filter((message) => message.subject === 'Sua senha do PoupEazy foi alterada').length, 1);
 });
 
 test('RESET-06 token malformado, expirado ou legado falha; senha invalida preserva o token', async (t) => {
@@ -217,4 +223,124 @@ test('RESET-08 erro de banco e codigo Gmail sao registrados sem causa/token/emai
   assert.equal(result.body.code, 'RESET_UNAVAILABLE');
   assert.deepEqual(logs, ['[password-reset] RESET_DATABASE_FAILED']);
   assert.equal(new GmailEmailError('unexpected-sensitive-value').code, 'EMAIL_SEND_UNKNOWN');
+});
+
+test('NOTICE-01 aviso usa horario de Sao Paulo e recuperacao na origem configurada sem segredos', () => {
+  const message = passwordChangedEmail('reset@example.test', 'https://poup-eazy.vercel.app/redefinir-senha', new Date('2026-11-27T02:30:00Z'));
+  assert.equal(message.to, 'reset@example.test');
+  assert.equal(message.subject, 'Sua senha do PoupEazy foi alterada');
+  assert.match(message.text, /26\/11\/2026, 23:30:00/);
+  assert.match(message.html, /26\/11\/2026, 23:30:00/);
+  assert.match(message.text, /America\/Sao_Paulo/);
+  assert.match(message.text, /https:\/\/poup-eazy\.vercel\.app\/esqueci-senha/);
+  assert.match(message.html, /background:#0E5787/);
+  assert.match(message.html, /mailto:poupeazy@gmail\.com/);
+  assert.doesNotMatch(JSON.stringify(message), /SyntheticPassword|\$2[aby]\$|[a-f0-9]{64}|\?token=|\bIP\b/);
+  const local = passwordChangedEmail('reset@example.test', 'http://localhost:5173/redefinir-senha', new Date('2026-11-27T02:30:00Z'));
+  assert.match(local.text, /http:\/\/localhost:5173\/esqueci-senha/);
+});
+
+test('NOTICE-02 troca autenticada avisa o titular do UPDATE uma vez sem aguardar entrega', async (t) => {
+  const store = accountStore();
+  const messages = [];
+  let finishDelivery;
+  const { request } = await localApp(t, { store, sendEmail: (message) => {
+    messages.push(message);
+    assert.equal(store.user.reset_token, null);
+    return new Promise((resolve) => { finishDelivery = resolve; });
+  } });
+  const oldToken = gerarToken(store.user);
+  const result = await request('/auth/password', { novaSenha: newPassword, email: 'untrusted@example.test' }, oldToken, 'PATCH');
+  assert.equal(result.status, 200);
+  await settle();
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].to, store.user.email);
+  assert.equal(messages[0].subject, 'Sua senha do PoupEazy foi alterada');
+  assert.equal(await bcrypt.compare(newPassword, store.user.senha_hash), true);
+  assert.equal((await request('/auth/password', { novaSenha: 'AnotherSyntheticPassword123!' }, oldToken, 'PATCH')).status, 401);
+  await settle();
+  assert.equal(messages.length, 1);
+  finishDelivery();
+});
+
+test('NOTICE-03 transporte desabilitado nao impede reset ou troca nem tenta enviar aviso', async (t) => {
+  const logs = [];
+  t.mock.method(console, 'error', (...args) => logs.push(args.join(' ')));
+  const store = accountStore();
+  const token = 'a'.repeat(64);
+  store.user.reset_token = digest(token); store.user.reset_expira_em = Date.now() + 3600000;
+  const { request } = await localApp(t, { store });
+  assert.equal((await request('/auth/reset-password', { token, novaSenha: newPassword })).status, 200);
+  assert.equal((await request('/auth/password', { novaSenha: password }, gerarToken(store.user), 'PATCH')).status, 200);
+  await settle();
+  assert.equal(await bcrypt.compare(password, store.user.senha_hash), true);
+  assert.deepEqual(logs, []);
+});
+
+test('NOTICE-04 token/senha invalidos e falhas de banco nao enviam aviso', async (t) => {
+  const logs = [];
+  t.mock.method(console, 'error', (...args) => logs.push(args.join(' ')));
+  const store = accountStore();
+  const query = store.query;
+  let failUpdate = false;
+  store.query = async (sql, values) => {
+    if (failUpdate && sql.startsWith('UPDATE usuarios SET senha_hash')) throw new Error('private-token reset@example.test');
+    return query(sql, values);
+  };
+  const messages = [];
+  const { request } = await localApp(t, { store, sendEmail: async (message) => messages.push(message) });
+  const authToken = gerarToken(store.user);
+  const token = 'a'.repeat(64);
+  assert.equal((await request('/auth/reset-password', { token: 'invalid', novaSenha: newPassword })).status, 400);
+  assert.equal((await request('/auth/reset-password', { token, novaSenha: newPassword })).status, 400);
+  store.user.reset_token = digest(token); store.user.reset_expira_em = 1;
+  assert.equal((await request('/auth/reset-password', { token, novaSenha: newPassword })).status, 400);
+  assert.equal((await request('/auth/reset-password', { token, novaSenha: '123' })).status, 422);
+  assert.equal((await request('/auth/password', { novaSenha: '123' }, authToken, 'PATCH')).status, 422);
+  failUpdate = true;
+  store.user.reset_expira_em = Date.now() + 3600000;
+  assert.equal((await request('/auth/reset-password', { token, novaSenha: newPassword })).status, 503);
+  const failedPatch = await request('/auth/password', { novaSenha: newPassword }, authToken, 'PATCH');
+  assert.equal(failedPatch.status, 503);
+  assert.equal(failedPatch.body.code, 'PASSWORD_UNAVAILABLE');
+  await settle();
+  assert.equal(messages.length, 0);
+  assert.equal(await bcrypt.compare(password, store.user.senha_hash), true);
+  assert.deepEqual(logs, ['[password-reset] RESET_DATABASE_FAILED', '[password-changed] PASSWORD_DATABASE_FAILED']);
+});
+
+test('NOTICE-05 conta removida entre autenticacao e UPDATE recebe 401 sem aviso', async (t) => {
+  const store = accountStore();
+  const query = store.query;
+  store.query = async (sql, values) => sql.startsWith('UPDATE usuarios SET senha_hash')
+    ? { rows: [], rowCount: 0 } : query(sql, values);
+  const messages = [];
+  const { request } = await localApp(t, { store, sendEmail: async (message) => messages.push(message) });
+  const result = await request('/auth/password', { novaSenha: newPassword }, gerarToken(store.user), 'PATCH');
+  assert.equal(result.status, 401);
+  await settle();
+  assert.equal(messages.length, 0);
+});
+
+test('NOTICE-06 falha Gmail nao desfaz alteracoes e registra somente codigo controlado', async (t) => {
+  const logs = [];
+  t.mock.method(console, 'error', (...args) => logs.push(args.join(' ')));
+  const store = accountStore();
+  const token = 'a'.repeat(64);
+  store.user.reset_token = digest(token); store.user.reset_expira_em = Date.now() + 3600000;
+  let attempts = 0;
+  const { request } = await localApp(t, { store, sendEmail: async () => {
+    attempts += 1;
+    throw new Error('private-token reset@example.test https://private-link');
+  } });
+  assert.equal((await request('/auth/reset-password', { token, novaSenha: newPassword })).status, 200);
+  await settle();
+  assert.equal(attempts, 1);
+  assert.equal(await bcrypt.compare(newPassword, store.user.senha_hash), true);
+  assert.equal(store.user.reset_token, null);
+  assert.equal((await request('/auth/password', { novaSenha: password }, gerarToken(store.user), 'PATCH')).status, 200);
+  await settle();
+  assert.equal(attempts, 2);
+  assert.equal(await bcrypt.compare(password, store.user.senha_hash), true);
+  assert.deepEqual(logs, ['[password-changed] EMAIL_SEND_UNKNOWN', '[password-changed] EMAIL_SEND_UNKNOWN']);
 });

@@ -22,13 +22,13 @@ async function preparePasswordReset({ database, email, resetUrl }) {
 
 async function consumePasswordReset({ database, token, passwordHash }) {
   // O proprio UPDATE revalida e consome o token, inclusive em resets concorrentes.
-  const { rowCount } = await database.query(
+  const { rows: [user] } = await database.query(
     `UPDATE usuarios SET senha_hash = $1, reset_token = NULL, reset_expira_em = NULL
       WHERE reset_token = $2 AND reset_expira_em > NOW()
-      RETURNING id`,
+      RETURNING id, email`,
     [passwordHash, hashResetToken(token)]
   );
-  return rowCount === 1;
+  return user || null;
 }
 
 module.exports = { preparePasswordReset, consumePasswordReset, hashResetToken };

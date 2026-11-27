@@ -8,6 +8,7 @@ const { validateEmail, validateString } = require('../utils/validation');
 const { deleteAccount } = require('../services/account-deletion.service');
 const { createGmailService, GmailEmailError } = require('../services/gmail.service');
 const { preparePasswordReset, consumePasswordReset } = require('../services/password-reset.service');
+const { passwordChangedEmail } = require('../emails/password-changed');
 const {
   createVerificationChallenge, buildVerificationEmail, prepareEmailVerification, consumeEmailVerification,
 } = require('../services/email-verification.service');
@@ -51,6 +52,16 @@ function dispatchEmail(response, message, context) {
       console.error(`[${context}] ${code}`);
     });
   });
+}
+
+function notifyPasswordChanged(response, account) {
+  if (!emailAvailable) return;
+  try {
+    dispatchEmail(response, passwordChangedEmail(account.email, config.passwordResetUrl), 'password-changed');
+  } catch {
+    // A senha ja foi persistida; falha na composicao do aviso nao desfaz a acao.
+    console.error('[password-changed] EMAIL_MESSAGE_INVALID');
+  }
 }
 
 // POST /api/auth/register
@@ -278,8 +289,9 @@ router.post('/reset-password', async (req, res, next) => {
     if (typeof novaSenha !== 'string') throw new ApiError(422, 'Informe uma nova senha valida.');
     const senha = validatePassword(novaSenha, 'novaSenha');
     const senhaHash = await bcrypt.hash(senha, 10);
-    const consumed = await consumePasswordReset({ database: db, token, passwordHash: senhaHash });
-    if (!consumed) throw new ApiError(400, 'Token de recuperacao invalido ou expirado.', 'RESET_TOKEN_INVALID');
+    const account = await consumePasswordReset({ database: db, token, passwordHash: senhaHash });
+    if (!account) throw new ApiError(400, 'Token de recuperacao invalido ou expirado.', 'RESET_TOKEN_INVALID');
+    notifyPasswordChanged(res, account);
     return res.json({ message: 'Senha atualizada com sucesso.' });
   } catch (err) {
     if (err instanceof ApiError) return next(err);
@@ -298,10 +310,17 @@ router.patch('/password', auth, async (req, res, next) => {
   try {
     const senha = validatePassword(novaSenha, 'novaSenha');
     const senhaHash = await bcrypt.hash(senha, 10);
-    await db.query('UPDATE usuarios SET senha_hash = $1, reset_token = NULL, reset_expira_em = NULL WHERE id = $2', [senhaHash, req.userId]);
+    const { rows: [account] } = await db.query(
+      'UPDATE usuarios SET senha_hash = $1, reset_token = NULL, reset_expira_em = NULL WHERE id = $2 RETURNING id, email',
+      [senhaHash, req.userId]
+    );
+    if (!account) throw new ApiError(401, 'Usuario nao encontrado.');
+    notifyPasswordChanged(res, account);
     return res.json({ message: 'Senha atualizada com sucesso.' });
   } catch (err) {
-    return next(err);
+    if (err instanceof ApiError) return next(err);
+    console.error('[password-changed] PASSWORD_DATABASE_FAILED');
+    return next(new ApiError(503, 'Nao foi possivel alterar a senha. Tente novamente.', 'PASSWORD_UNAVAILABLE'));
   }
 });
 

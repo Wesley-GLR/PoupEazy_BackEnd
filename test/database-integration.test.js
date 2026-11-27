@@ -304,6 +304,8 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
       request('POST', '/auth/reset-password', { token: validToken, novaSenha: 'NewSyntheticPassword123!' }),
     ]);
     assert.deepEqual(consumed.map((result) => result.status).sort(), [200, 400]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sentEmails.filter((message) => message.to === email && message.subject === 'Sua senha do PoupEazy foi alterada').length, 1);
     assert.equal(consumed.find((result) => result.status === 400).body.code, 'RESET_TOKEN_INVALID');
     await expectRequest(400, 'POST', '/auth/reset-password', { token: validToken, novaSenha: 'AnotherSyntheticPassword123!' });
     await expectRequest(401, 'GET', '/metas', undefined, createdAccount.token);

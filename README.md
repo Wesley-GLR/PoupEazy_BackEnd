@@ -84,7 +84,8 @@ no ambiente antes, se for usar a Pluggy.
 
 O transporte de e-mail usa OAuth e a Gmail API por HTTPS. Ha um comando local
 para enviar uma mensagem fixa de teste, recuperacao de senha e confirmacao de cadastro.
-Notificacoes e relatorios ainda nao disparam e-mails.
+Troca e reset de senha tambem enviam um aviso de seguranca apos o sucesso.
+Alertas de orcamento e relatorios ainda nao disparam e-mails.
 O envio fica desabilitado por padrao.
 
 1. Na Google Cloud, habilite a Gmail API no projeto do cliente OAuth. O refresh
@@ -247,6 +248,29 @@ O envio usa o mesmo mecanismo sem fila duravel documentado no reset: resposta
 nao garante entrega, reinicios podem perder a tentativa e nao ha retry automatico.
 Os logs guardam apenas codigos controlados. Exclusao da conta remove os campos
 de verificacao juntamente com o usuario.
+
+### 2.8 Aviso de senha alterada
+
+Apos o sucesso de `POST /api/auth/reset-password` ou `PATCH /api/auth/password`,
+o titular recebe um unico aviso de seguranca se o transporte estiver habilitado.
+O destinatario vem do `UPDATE ... RETURNING id, email` que gravou a senha,
+sem aceitar endereco enviado pelo cliente. O reset concorrente/reutilizado so
+avisa a tentativa que efetivamente consumiu o token. Conta removida antes do
+UPDATE da troca recebe 401, sem informar sucesso nem enviar aviso.
+
+O e-mail inclui data e hora em `America/Sao_Paulo`, orientacao para quem nao
+reconhece a alteracao, link `/esqueci-senha` na mesma origem de
+`PASSWORD_RESET_URL` e suporte `poupeazy@gmail.com`. Nao inclui senha, hash,
+token de acesso/recuperacao ou IP. Pedir um link no forgot-password, token
+invalido/expirado/usado, senha invalida ou falha no banco nao dispara esse aviso.
+Os corpos de sucesso das duas APIs permanecem os mesmos.
+
+A senha e persistida antes do aviso, e o envio comeca depois da resposta HTTP.
+`EMAIL_ENABLED=false` apenas omite o aviso; nao impede a troca ou o reset.
+Falha no Gmail nao desfaz a senha nem transforma o sucesso em erro. Nao ha
+retry automatico, fila duravel ou garantia de entrega: reinicio entre a
+resposta e o envio pode perder o aviso. Os logs registram somente codigos
+controlados. Esta etapa nao requer nova variavel de ambiente ou migration.
 
 ---
 
