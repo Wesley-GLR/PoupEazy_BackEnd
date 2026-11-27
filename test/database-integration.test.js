@@ -24,6 +24,7 @@ Object.assign(process.env, {
 const db = require('../src/db');
 const { createApp } = require('../src/app');
 const { syncIntegration } = require('../src/services/pluggy.service');
+const { deleteAccount } = require('../src/services/account-deletion.service');
 
 describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !explicitUrl }, () => {
   let admin;
@@ -302,5 +303,74 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     assert.equal((await db.query('SELECT 1 FROM despesas WHERE id_integracao = $1', [integration.id])).rowCount, 0);
     assert.equal((await db.query('SELECT 1 FROM orcamento WHERE id_usuario = $1 AND ano = 2024', [accountB.user.id])).rowCount, 0);
     assert.equal((await db.query('SELECT ultimo_uso FROM open_finance_tokens WHERE id = $1', [integration.id])).rows[0].ultimo_uso, null);
+  });
+
+  test('DB-17 exclusao publica apaga dados associados, preserva outra conta e invalida JWT', async () => {
+    async function seed(name, phone) {
+      const account = await expectRequest(201, 'POST', '/auth/register', { email: `${name}@example.test`, password });
+      const ownedBudget = await budget(account, 4);
+      const category = await expectRequest(201, 'POST', '/categorias', { nome: name, tipo: 'despesa_variavel' }, account.token);
+      const goal = await expectRequest(201, 'POST', '/metas', { nome: name, valor_objetivo: 100, data_limite: '2027-12-31' }, account.token);
+      // IDs legados repetidos nao autorizam apagar itens no provedor externo.
+      const integration = (await db.query("INSERT INTO open_finance_tokens (id_usuario, instituicao, access_token_enc, expira_em) VALUES ($1, 'Sandbox exclusao', 'shared-legacy-item-id', NOW() + INTERVAL '1 day') RETURNING id", [account.user.id])).rows[0];
+      const expense = await expectRequest(201, 'POST', '/despesas', {
+        id_orcamento: ownedBudget.id, id_categoria: category.id, id_metas: goal.id,
+        valor: 20, data_transacao: '2026-04-15', tipo: 'despesa',
+      }, account.token);
+      await db.query('UPDATE despesas SET id_integracao = $1 WHERE id = $2', [integration.id, expense.id]);
+      await db.query("INSERT INTO notificacoes (id_usuario, tipo, titulo, mensagem) VALUES ($1, 'relatorio', 'Sintetico', 'Sintetico')", [account.user.id]);
+      const link = (await db.query('INSERT INTO whatsapp_vinculos (id_usuario, wa_id, pendencia) VALUES ($1, $2, $3) RETURNING id', [account.user.id, phone, { description: 'Sintetico' }])).rows[0];
+      await db.query("INSERT INTO whatsapp_codigos (id_usuario, codigo_hash, expira_em) VALUES ($1, $2, NOW() + INTERVAL '1 hour')", [account.user.id, crypto.createHash('sha256').update(name).digest('hex')]);
+      await db.query('INSERT INTO whatsapp_mensagens (id, id_vinculo, resposta, relatorio) VALUES ($1, $2, $3, $4)', [`delete-test-${name}`, link.id, 'Sintetico', { gastos: 20 }]);
+      await db.query("UPDATE usuarios SET reset_token = 'synthetic-reset-token', reset_expira_em = NOW() + INTERVAL '1 hour' WHERE id = $1", [account.user.id]);
+      return { account, budget: ownedBudget, category, goal, integration, expense, link };
+    }
+    const removed = await seed('delete-owner', '5511999991001');
+    const kept = await seed('delete-other', '5511999991002');
+    const systemCount = (await db.query('SELECT COUNT(*)::int AS total FROM categoria WHERE sistema = TRUE')).rows[0].total;
+    const body = { email: removed.account.user.email, password, confirmacao: 'EXCLUIR' };
+    await expectRequest(400, 'POST', '/auth/delete-account', { ...body, confirmacao: 'nao' });
+    const unknown = await expectRequest(401, 'POST', '/auth/delete-account', { ...body, email: 'delete-missing@example.test' });
+    const wrong = await expectRequest(401, 'POST', '/auth/delete-account', { ...body, password: 'wrong-password' });
+    assert.deepEqual(wrong, unknown);
+    assert.equal((await db.query('SELECT 1 FROM usuarios WHERE id = $1', [removed.account.user.id])).rowCount, 1);
+
+    await expectRequest(200, 'POST', '/auth/delete-account', body);
+    for (const table of ['usuarios', 'profiles', 'orcamento', 'categoria', 'metas', 'open_finance_tokens', 'notificacoes', 'whatsapp_codigos', 'whatsapp_vinculos']) {
+      const column = ['usuarios', 'profiles'].includes(table) ? 'id' : 'id_usuario';
+      assert.equal((await db.query(`SELECT 1 FROM ${table} WHERE ${column} = $1`, [removed.account.user.id])).rowCount, 0, table);
+      assert.ok((await db.query(`SELECT 1 FROM ${table} WHERE ${column} = $1`, [kept.account.user.id])).rowCount > 0, `preserva ${table}`);
+    }
+    assert.equal((await db.query('SELECT 1 FROM despesas WHERE id = $1', [removed.expense.id])).rowCount, 0);
+    assert.equal((await db.query('SELECT 1 FROM despesas WHERE id = $1', [kept.expense.id])).rowCount, 1);
+    assert.equal((await db.query('SELECT 1 FROM whatsapp_mensagens WHERE id_vinculo = $1', [removed.link.id])).rowCount, 0);
+    assert.equal((await db.query('SELECT 1 FROM whatsapp_mensagens WHERE id_vinculo = $1', [kept.link.id])).rowCount, 1);
+    assert.equal((await db.query('SELECT COUNT(*)::int AS total FROM categoria WHERE sistema = TRUE')).rows[0].total, systemCount);
+    await expectRequest(401, 'GET', '/metas', undefined, removed.account.token);
+    await expectRequest(401, 'POST', '/auth/login', { email: body.email, password });
+    await expectRequest(401, 'POST', '/auth/delete-account', body);
+    await expectRequest(200, 'GET', '/metas', undefined, kept.account.token);
+  });
+
+  test('DB-18 falha SQL no fim da exclusao restaura a conta e suas despesas', async () => {
+    const account = await expectRequest(201, 'POST', '/auth/register', { email: 'delete-rollback@example.test', password });
+    const ownedBudget = await budget(account, 5);
+    const expense = await expectRequest(201, 'POST', '/despesas', transaction({ id_orcamento: ownedBudget.id, data_transacao: '2026-05-15' }), account.token);
+    await db.query(`CREATE FUNCTION test_block_account_delete() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+      BEGIN
+        IF OLD.email = 'delete-rollback@example.test' THEN RAISE EXCEPTION 'synthetic-delete-failure'; END IF;
+        RETURN OLD;
+      END;
+      $$;
+      CREATE TRIGGER test_block_account_delete BEFORE DELETE ON usuarios FOR EACH ROW EXECUTE FUNCTION test_block_account_delete()`);
+    try {
+      await assert.rejects(deleteAccount({ database: db, email: account.user.email, password }), /synthetic-delete-failure/);
+      assert.equal((await db.query('SELECT 1 FROM usuarios WHERE id = $1', [account.user.id])).rowCount, 1);
+      assert.equal((await db.query('SELECT 1 FROM despesas WHERE id = $1', [expense.id])).rowCount, 1);
+      assert.equal(await databaseAmount('orcamento', ownedBudget.id, 'valor_real'), 25.50);
+      await expectRequest(200, 'GET', '/metas', undefined, account.token);
+    } finally {
+      await db.query('DROP TRIGGER test_block_account_delete ON usuarios; DROP FUNCTION test_block_account_delete()');
+    }
   });
 });

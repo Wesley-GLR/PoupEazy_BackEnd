@@ -100,6 +100,7 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 | GET  | `/health` | Status da API (publico) |
 | POST | `/auth/register` | Cria usuario + profile, retorna `{ token, user, profile }` |
 | POST | `/auth/login` | Login, retorna `{ token, user, profile }` |
+| POST | `/auth/delete-account` | Publico: reautentica `{ email, password, confirmacao: "EXCLUIR" }` e exclui a conta e dados locais associados |
 | GET  | `/auth/me` | Usuario + profile da sessao atual |
 | POST | `/auth/forgot-password` | Gera token de reset (em DEV retorna `resetToken`) |
 | POST | `/auth/reset-password` | Redefine senha com `{ token, novaSenha }` |
@@ -129,6 +130,31 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 > Recuperacao de senha (modo dev): chame `POST /auth/forgot-password`, copie o
 > `resetToken` da resposta e use em `POST /auth/reset-password`. No frontend, o link
 > e `/redefinir-senha?token=SEU_TOKEN`.
+
+### Exclusao de conta
+
+`POST /api/auth/delete-account` permite solicitar exclusao pela pagina publica
+do site, sem depender de uma sessao no app. Exige e-mail, senha atual e
+`confirmacao: "EXCLUIR"`; o limite de tentativas das rotas de autenticacao tambem
+se aplica. E-mail inexistente e senha incorreta recebem a mesma resposta 401.
+Sucesso retorna 200 com `{ "message": "Conta e dados associados excluidos da base ativa do PoupEazy." }`.
+
+A exclusao ocorre em uma unica transacao: transacoes financeiras, notificacoes,
+mensagens vinculadas/codigos/vinculo WhatsApp, integracoes locais Open Finance,
+metas, categorias pessoais, orcamentos, perfil e credenciais. Categorias do
+sistema e dados de outras contas sao preservados. Tokens JWT antigos deixam de
+ser aceitos porque toda rota protegida verifica se a conta ainda existe.
+Tabelas opcionais do WhatsApp sao verificadas antes da limpeza, permitindo
+tambem excluir contas em bancos anteriores a migration `005_whatsapp.sql`.
+
+O endpoint remove os dados da base ativa do PoupEazy. Nao exclui mensagens ja
+entregues no WhatsApp nem dados mantidos por provedores e bancos. No contrato
+atual, `open_finance_tokens.access_token_enc` guarda um itemId da Pluggy; nao
+fazemos exclusao remota por esse ID sem validar a propriedade no provedor.
+Revogacao externa, retencao de backups e registros de infraestrutura exigem
+procedimentos e prazos definidos antes de prometer exclusao integral. Ainda nao
+ha fila de e-mails ou relatorios persistidos para apagar; ao adicionar essas
+funcionalidades, sua limpeza deve entrar na mesma politica de exclusao.
 
 ### Banco existente
 

@@ -6,6 +6,7 @@ const config = require('../config');
 const { auth, gerarToken } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
 const { validateEmail, validateString } = require('../utils/validation');
+const { deleteAccount } = require('../services/account-deletion.service');
 
 const router = express.Router();
 
@@ -126,6 +127,28 @@ router.post('/login', async (req, res, next) => {
     return res.json({ token, user: publicUser(usuario), profile: profileRows[0] || null });
   } catch (err) {
     return next(err);
+  }
+});
+
+// POST /api/auth/delete-account (publico, com reautenticacao e confirmacao)
+router.post('/delete-account', async (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  const { email, password, confirmacao } = req.body || {};
+  if (!email || !password) {
+    return next(new ApiError(400, 'email e password sao obrigatorios.'));
+  }
+  if (confirmacao !== 'EXCLUIR') {
+    return next(new ApiError(400, 'Confirme a exclusao digitando EXCLUIR.'));
+  }
+  try {
+    const normalizedEmail = validateEmail(email);
+    if (typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 72) {
+      throw new ApiError(401, 'E-mail ou senha invalidos.');
+    }
+    await deleteAccount({ database: db, email: normalizedEmail, password });
+    return res.json({ message: 'Conta e dados associados excluidos da base ativa do PoupEazy.' });
+  } catch (error) {
+    return next(error);
   }
 });
 
