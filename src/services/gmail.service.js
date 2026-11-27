@@ -24,7 +24,7 @@ function createOAuthClient(settings) {
 }
 
 function validateMessage(message) {
-  const { to, subject, text, html } = message || {};
+  const { to, subject, text, html, attachments } = message || {};
   const recipient = normalizeEmailAddress(to);
   if (!recipient || typeof subject !== 'string' || !subject.trim()
       || subject.length > 200 || /[\r\n]/.test(subject)
@@ -33,7 +33,29 @@ function validateMessage(message) {
       || Buffer.byteLength(text, 'utf8') + Buffer.byteLength(html || '', 'utf8') > MAX_CONTENT_BYTES) {
     throw new GmailEmailError('EMAIL_MESSAGE_INVALID');
   }
-  return { to: { address: recipient }, subject: subject.trim(), text, ...(html === undefined ? {} : { html }) };
+  let safeAttachments;
+  if (attachments !== undefined) {
+    if (!Array.isArray(attachments) || !attachments.length || attachments.length > 6) throw new GmailEmailError('EMAIL_MESSAGE_INVALID');
+    let total = 0;
+    safeAttachments = attachments.map((file) => {
+      if (!file || typeof file !== 'object' || Object.keys(file).some((key) => !['filename','content','contentType'].includes(key))
+          || !Buffer.isBuffer(file.content) || !file.content.length
+          || !/^poupeazy-(?:relatorio|resumo|transacoes|categorias|orcamentos|metas)-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}\.(pdf|csv)$/.test(file.filename || '')) {
+        throw new GmailEmailError('EMAIL_MESSAGE_INVALID');
+      }
+      const pdf = file.filename.endsWith('.pdf');
+      if ((pdf && (file.contentType !== 'application/pdf' || file.content.subarray(0,5).toString('ascii') !== '%PDF-'))
+          || (!pdf && (file.contentType !== 'text/csv; charset=utf-8' || !file.content.subarray(0,3).equals(Buffer.from([0xEF,0xBB,0xBF]))))) {
+        throw new GmailEmailError('EMAIL_MESSAGE_INVALID');
+      }
+      if (!pdf) { try { new TextDecoder('utf-8',{fatal:true}).decode(file.content); } catch { throw new GmailEmailError('EMAIL_MESSAGE_INVALID'); } }
+      total += file.content.length;
+      return { filename: file.filename, content: file.content, contentType: file.contentType, contentDisposition: 'attachment' };
+    });
+    if (total > 5 * 1024 * 1024) throw new GmailEmailError('EMAIL_MESSAGE_INVALID');
+  }
+  return { to: { address: recipient }, subject: subject.trim(), text, ...(html === undefined ? {} : { html }),
+    ...(safeAttachments ? { attachments: safeAttachments } : {}) };
 }
 
 function createGmailService(settings, { authClient, fetchImpl = globalThis.fetch } = {}) {
@@ -50,7 +72,7 @@ function createGmailService(settings, { authClient, fetchImpl = globalThis.fetch
   // Endereco explicito impede usar por acidente o token de outra caixa com "me".
   const sendUrl = `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(settings.fromAddress)}/messages/send`;
 
-  async function send(message) {
+  async function send(message, { signal } = {}) {
     const content = validateMessage(message);
     let mime;
     try {
@@ -70,13 +92,14 @@ function createGmailService(settings, { authClient, fetchImpl = globalThis.fetch
         ? 'EMAIL_AUTH_TEMPORARY' : 'EMAIL_AUTH_FAILED');
     }
     if (!accessToken) throw new GmailEmailError('EMAIL_AUTH_FAILED');
+    if (signal?.aborted) throw new GmailEmailError('EMAIL_AUTH_TEMPORARY');
 
     let response;
     let payload;
     try {
       // Sem retry ou redirect automatico: um envio com resposta perdida pode ter ocorrido.
       response = await fetchImpl(sendUrl, {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ raw: mime.message.toString('base64url') }),
       });

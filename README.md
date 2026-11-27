@@ -85,7 +85,7 @@ no ambiente antes, se for usar a Pluggy.
 O transporte de e-mail usa OAuth e a Gmail API por HTTPS. Ha um comando local
 para enviar uma mensagem fixa de teste, recuperacao de senha e confirmacao de cadastro.
 Troca e reset de senha tambem enviam um aviso de seguranca apos o sucesso.
-Alertas opcionais de orcamento, novos lancamentos e metas tambem usam esse transporte; relatorios por e-mail ficam para outra etapa.
+Alertas opcionais de orcamento, novos lancamentos, metas e relatorios solicitados pelo usuario tambem usam esse transporte.
 O envio fica desabilitado por padrao.
 
 1. Na Google Cloud, habilite a Gmail API no projeto do cliente OAuth. O refresh
@@ -351,6 +351,75 @@ Os testes budget-email-database.test.js e financial-event-email-database.test.js
 usam PostgreSQL loopback descartavel e remetente falso para validar SQL,
 deduplicacao, lotes, rollback, concorrencia e exclusao sem acessar Gmail/Neon.
 
+### 2.10 Relatorios modulares por e-mail
+
+Antes de publicar esta etapa, aplique `db/migrations/009_report_email.sql` no
+banco correto, depois publique a API e os clientes. A migration idempotente
+acrescenta somente `usuarios.relatorio_email_solicitado_em`; nenhuma migration
+roda automaticamente no startup. Nao ha nova variavel de ambiente ou servico.
+
+`POST /api/relatorios/email` exige JWT e e-mail confirmado. O destinatario e
+sempre o e-mail atual da propria conta, consultado no banco. O corpo aceita
+somente os quatro campos abaixo, sem destinatario ou anexos fornecidos pelo
+cliente:
+
+```json
+{
+  "data_inicio": "2026-11-01",
+  "data_fim": "2026-11-27",
+  "secoes": ["resumo", "categorias"],
+  "formatos": ["pdf"]
+}
+```
+
+As secoes disponiveis sao `resumo`, `transacoes`, `categorias`, `orcamentos` e
+`metas`; os formatos sao `pdf` e `csv`. Cada lista precisa ter pelo menos uma
+opcao, sem repeticoes. Somente as secoes escolhidas entram nos arquivos. O PDF
+reune essas secoes; CSV gera um arquivo separado por secao, em UTF-8 com BOM,
+separador ponto e virgula e protecao contra formulas em textos do usuario.
+
+Datas devem ser reais no formato `YYYY-MM-DD`, entre 2000 e 2100, com intervalo
+inclusivo de ate 366 dias. O periodo pode conter no maximo 1000 transacoes
+confirmadas da conta, mesmo quando a secao de transacoes nao foi selecionada.
+Se metas for selecionada, o limite e 200 metas atuais. Limites excedidos sao
+rejeitados; os dados nao sao truncados. Sao permitidos ate seis anexos, com
+limite total de 5 MiB. Para reduzir um pedido, diminua o periodo ou desmarque
+secoes/formatos.
+
+Resumo, transacoes e categorias consideram somente lancamentos confirmados no
+intervalo. Resultado do periodo significa receitas menos despesas desse recorte,
+sem representar saldo bancario. Orcamentos mostram o planejado integral do mes,
+sem rateio, e despesas brutas confirmadas no recorte, com datas cobertas e
+indicacao de mes parcial. Metas mostram status, objetivo e saldo atuais na
+exportacao, acompanhados de aportes/retiradas confirmados no periodo; nao
+reconstituem uma posicao historica. A leitura usa snapshot PostgreSQL
+`REPEATABLE READ READ ONLY`, com timeout de cinco segundos por consulta.
+
+O pedido e sincrono e limitado a um relatorio em processamento por instancia da
+API. Antes da geracao, uma reserva atomica impõe intervalo de 60 segundos por
+conta, preservado mesmo se a geracao ou o envio falhar. A API limita a espera a
+45 segundos; clientes podem aguardar ate 120 segundos para incluir o despertar
+da hospedagem. Nao ha fila, agendamento ou retry automatico. PDF e CSV sao
+gerados em memoria, sem salvar arquivos, links publicos ou historico de
+relatorios no servidor. O transporte aceita somente Buffers PDF/CSV com nomes
+fixos e nao abre caminhos ou URLs fornecidos pelo cliente.
+
+Uma resposta `200` contem `message` e `retry_after_seconds: 60` e indica que o
+Gmail aceitou a mensagem, sem garantir chegada a caixa de entrada. Erros `429`
+usam `REPORT_BUSY` ou `REPORT_COOLDOWN`, com `retry_after_seconds` e cabecalho
+`Retry-After`. Erros `422` usam `REPORT_REQUEST_INVALID` ou
+`REPORT_LIMIT_EXCEEDED`; `403 EMAIL_NOT_VERIFIED` pede confirmacao. Servico
+desativado retorna `503 EMAIL_DISABLED`; falhas de geracao ou envio conhecido
+retornam `503 REPORT_UNAVAILABLE`. `502 EMAIL_SEND_UNKNOWN` significa resultado
+incerto depois de iniciar o envio: confira caixa de entrada e spam antes de
+pedir novamente. Nenhum anexo, endereco ou erro bruto e registrado em logs.
+
+O PDF usa as fontes Inter incluidas em `assets/fonts`, sob a licenca OFL
+acompanhante. Caracteres sem glifo, como alguns emojis e ideogramas, aparecem
+como `?` com nota no PDF; os CSVs preservam o texto Unicode original.
+Os testes de relatorios usam dados sinteticos, transporte falso e PostgreSQL
+descartavel opcional; nao enviam e-mails reais.
+
 ---
 
 
@@ -403,6 +472,7 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 | GET | `/relatorios/resumo-mensal` | View `vw_resumo_mensal` |
 | GET | `/relatorios/progresso-metas` | View `vw_progresso_metas` |
 | GET | `/relatorios/historico` | View `vw_historico_comparativo` |
+| POST | `/relatorios/email` | Relatorio modular PDF/CSV para o e-mail confirmado da propria conta |
 
 > Recuperacao de senha: use o link enviado por e-mail, que abre a pagina
 > `/redefinir-senha?token=...`. Nunca copie hashes do banco para o frontend.

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
     email_verificacao_obrigatoria BOOLEAN NOT NULL DEFAULT TRUE,
     verificacao_token_hash TEXT,
     verificacao_expira_em TIMESTAMPTZ,
+    relatorio_email_solicitado_em TIMESTAMPTZ,
     criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 

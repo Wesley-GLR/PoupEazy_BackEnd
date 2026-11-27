@@ -15,7 +15,7 @@ const despesasRoutes = require('./routes/despesas.routes');
 const notificacoesRoutes = require('./routes/notificacoes.routes');
 const integracoesRoutes = require('./routes/integracoes.routes');
 const pluggyRoutes = require('./routes/pluggy.routes');
-const relatoriosRoutes = require('./routes/relatorios.routes');
+const { createRelatoriosRouter } = require('./routes/relatorios.routes');
 const { createWebhookRouter, createLinkRouter } = require('./routes/whatsapp.routes');
 
 function createApp({ sendWhatsAppText, sendEmail } = {}) {
@@ -67,7 +67,7 @@ function createApp({ sendWhatsAppText, sendEmail } = {}) {
   app.use('/api/notificacoes', notificacoesRoutes);
   app.use('/api/integracoes', integracoesRoutes);
   app.use('/api/pluggy', pluggyRoutes);
-  app.use('/api/relatorios', relatoriosRoutes);
+  app.use('/api/relatorios', createRelatoriosRouter({ sendEmail }));
   app.use('/api/whatsapp', createLinkRouter(config.whatsapp));
 
   app.use(notFound);

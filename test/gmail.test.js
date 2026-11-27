@@ -67,7 +67,7 @@ test('GMAIL-03 compoe MIME UTF-8 e envia somente ao destinatario e caixa configu
       assert.match(mime, /multipart\/alternative/);
       assert.match(mime, /charset=utf-8/i);
       assert.doesNotMatch(mime, /synthetic-client-secret|synthetic-refresh-token|synthetic-access-token/);
-      // Campos de entrega, anexos e MIME bruto nao passam pelo contrato deste servico.
+      // Campos de entrega e MIME bruto nao passam pelo contrato deste servico.
       assert.doesNotMatch(mime, /^Bcc:|^Cc:|unexpected-recipient|unexpected-body|secret-file/m);
       return Response.json({ id: 'synthetic-message-id', threadId: 'synthetic-thread-id', privateField: 'omit' });
     },
@@ -76,7 +76,6 @@ test('GMAIL-03 compoe MIME UTF-8 e envia somente ao destinatario e caixa configu
     ...message, html: '<p>Olá! Conteúdo de teste.</p>',
     from: 'unexpected-recipient@example.test', cc: 'unexpected-recipient@example.test',
     bcc: 'unexpected-recipient@example.test', raw: 'unexpected-body',
-    attachments: [{ path: 'secret-file', filename: 'secret-file' }],
   });
   assert.equal(requests, 1);
   assert.deepEqual(result, { id: 'synthetic-message-id', threadId: 'synthetic-thread-id' });
@@ -197,4 +196,32 @@ test('GMAIL-11 cliente OAuth real limita timeout/retry e desativa interceptors d
   });
   const service = createGmailService(settings, { fetchImpl: async () => Response.json({ id: 'synthetic-id' }) });
   assert.deepEqual(await service.send(message), { id: 'synthetic-id' });
+});
+
+test('GMAIL-12 anexos so aceitam Buffers PDF/CSV com nome, MIME e tamanho seguros',async()=>{
+  const service=createGmailService(settings,{authClient:{getAccessToken:()=>assert.fail('nao deve consultar OAuth')},fetchImpl:()=>assert.fail('nao deve acessar rede')});
+  const file={filename:'poupeazy-resumo-2026-11-01-2026-11-27.csv',content:Buffer.from('\uFEFFa;b\r\n'),contentType:'text/csv; charset=utf-8'};
+  for(const patch of [{path:'/private'},{href:'https://private'},{raw:'private'},{cid:'x'},{encoding:'base64'},{headers:{}},
+    {content:'string'},{content:{type:'Buffer',data:[1]}},{filename:'../private.csv'},{filename:'evil\r\nBcc: private.csv'},
+    {contentType:'application/pdf'},{content:Buffer.from('without-bom')},
+  ])await assert.rejects(service.send({...message,attachments:[{...file,...patch}]}),{code:'EMAIL_MESSAGE_INVALID'});
+  await assert.rejects(service.send({...message,attachments:Array(7).fill(file)}),{code:'EMAIL_MESSAGE_INVALID'});
+  await assert.rejects(service.send({...message,attachments:[{filename:'poupeazy-relatorio-2026-11-01-2026-11-27.pdf',content:Buffer.alloc(5*1024*1024+1,'%PDF-'),contentType:'application/pdf'}]}),{code:'EMAIL_MESSAGE_INVALID'});
+});
+
+test('GMAIL-13 MIME inclui anexos validados sem caminhos nem destinatario adicional',async()=>{
+  let calls=0;
+  const service=createGmailService(settings,{authClient:successfulAuth(),fetchImpl:async(url,options)=>{
+    calls++;const raw=Buffer.from(JSON.parse(options.body).raw,'base64url').toString('utf8');
+    assert.match(raw,/Content-Type: application\/pdf/);
+    assert.match(raw,/Content-Type: text\/csv/);
+    assert.match(raw,/Content-Disposition: attachment/);
+    assert.doesNotMatch(raw,/Bcc:/);
+    return Response.json({id:'synthetic-id'});
+  }});
+  await service.send({...message,attachments:[
+    {filename:'poupeazy-relatorio-2026-11-01-2026-11-27.pdf',content:Buffer.from('%PDF-1.7\nsynthetic'),contentType:'application/pdf'},
+    {filename:'poupeazy-resumo-2026-11-01-2026-11-27.csv',content:Buffer.from('\uFEFFa;b\r\n'),contentType:'text/csv; charset=utf-8'},
+  ]});
+  assert.equal(calls,1);
 });
