@@ -1,9 +1,19 @@
-const { createCanvas } = require('@napi-rs/canvas');
+const path = require('node:path');
+const { createCanvas, GlobalFonts } = require('@napi-rs/canvas');
 const { currency } = require('./whatsapp-text');
 
 const formatDate = (value) => value.split('-').reverse().join('/');
+const reportFont = 'PoupEazy Report';
+const fontDirectory = path.join(__dirname, '../assets/fonts');
+let regularFont;
+let boldFont;
 
 async function renderReportImage(report) {
+  // O Render pode executar a API em um ambiente sem fontes de sistema.
+  regularFont ??= GlobalFonts.registerFromPath(path.join(fontDirectory, 'LiberationSans-Regular.ttf'), reportFont);
+  boldFont ??= GlobalFonts.registerFromPath(path.join(fontDirectory, 'LiberationSans-Bold.ttf'), reportFont);
+  if (!regularFont || !boldFont) throw new Error('Não foi possível carregar a fonte do relatório.');
+
   const categories = report.categorias ?? [];
   const width = 800;
   const height = categories.length ? 340 + categories.length * 100 : 420;
@@ -16,7 +26,7 @@ async function renderReportImage(report) {
   }
 
   function label(value, x, y, size, color, bold = false, maxWidth) {
-    context.font = `${bold ? 'bold ' : ''}${size}px sans-serif`;
+    context.font = `${bold ? 'bold ' : ''}${size}px "${reportFont}"`;
     context.fillStyle = color;
     context.fillText(value, x, y, maxWidth);
   }

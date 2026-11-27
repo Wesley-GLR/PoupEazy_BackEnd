@@ -281,6 +281,15 @@ test('webhook, vínculo e extrato com PostgreSQL', { skip: !testDatabaseUrl }, a
     assert.match(asset.headers.get('cache-control'), /no-store/);
     const bytes = Buffer.from(await asset.arrayBuffer());
     assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    const { createCanvas, loadImage } = require('@napi-rs/canvas');
+    const bitmap = await loadImage(bytes);
+    const context = createCanvas(bitmap.width, bitmap.height).getContext('2d');
+    context.drawImage(bitmap, 0, 0);
+    const titlePixels = context.getImageData(40, 54, 400, 43).data;
+    assert.ok(
+      titlePixels.some((value, index) => index % 4 === 0 && value > 220),
+      'O título deve aparecer no cabeçalho escuro do relatório.'
+    );
     const unknown = await originalFetch(base + '/vonage-test/media/' + '0'.repeat(48) + '.png');
     assert.equal(unknown.status, 404);
   });
