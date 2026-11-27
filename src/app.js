@@ -6,6 +6,7 @@ const config = require('./config');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
 const { createAuthRouter } = require('./routes/auth.routes');
+const emailPreferencesRoutes = require('./routes/email-preferences.routes');
 const profileRoutes = require('./routes/profile.routes');
 const metasRoutes = require('./routes/metas.routes');
 const orcamentosRoutes = require('./routes/orcamentos.routes');
@@ -57,6 +58,7 @@ function createApp({ sendWhatsAppText, sendEmail } = {}) {
   app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
   app.use('/api/auth', createAuthRouter({ sendEmail }));
+  app.use('/api/preferencias-email', emailPreferencesRoutes);
   app.use('/api/profile', profileRoutes);
   app.use('/api/metas', metasRoutes);
   app.use('/api/orcamentos', orcamentosRoutes);

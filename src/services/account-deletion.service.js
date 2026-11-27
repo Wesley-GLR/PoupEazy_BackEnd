@@ -61,6 +61,9 @@ async function deleteAccount({ database, email, password }) {
     await client.query('DELETE FROM metas WHERE id_usuario = $1', [user.id]);
     await client.query('DELETE FROM categoria WHERE id_usuario = $1', [user.id]);
     await client.query('DELETE FROM orcamento WHERE id_usuario = $1', [user.id]);
+    // Sem FK para nao inverter locks nos triggers; limpar depois das fontes.
+    const { rows: [eventQueue] } = await client.query("SELECT to_regclass('email_alertas_eventos') AS eventos");
+    if (eventQueue.eventos) await client.query('DELETE FROM email_alertas_eventos WHERE id_usuario = $1', [user.id]);
     // O perfil e removido pela FK CASCADE. Reset tokens saem com o usuario.
     await client.query('DELETE FROM usuarios WHERE id = $1', [user.id]);
 

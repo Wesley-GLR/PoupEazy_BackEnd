@@ -85,7 +85,7 @@ no ambiente antes, se for usar a Pluggy.
 O transporte de e-mail usa OAuth e a Gmail API por HTTPS. Ha um comando local
 para enviar uma mensagem fixa de teste, recuperacao de senha e confirmacao de cadastro.
 Troca e reset de senha tambem enviam um aviso de seguranca apos o sucesso.
-Alertas de orcamento e relatorios ainda nao disparam e-mails.
+Alertas opcionais de orcamento, novos lancamentos e metas tambem usam esse transporte; relatorios por e-mail ficam para outra etapa.
 O envio fica desabilitado por padrao.
 
 1. Na Google Cloud, habilite a Gmail API no projeto do cliente OAuth. O refresh
@@ -272,7 +272,87 @@ retry automatico, fila duravel ou garantia de entrega: reinicio entre a
 resposta e o envio pode perder o aviso. Os logs registram somente codigos
 controlados. Esta etapa nao requer nova variavel de ambiente ou migration.
 
+### 2.9 Preferencias e alertas financeiros opcionais
+
+Antes de publicar os alertas, aplique `db/migrations/008_budget_email_alerts.sql`
+no banco correto. A migration e idempotente e nao reenvia alertas nem ativa
+preferencias existentes. `schema.sql` inclui as mesmas estruturas para uma
+instalacao nova. Nao sao necessarios servico pago, nova dependencia ou nova
+variavel de ambiente. O worker so inicia pelo `src/server.js` real e com
+`EMAIL_ENABLED=true`; `createApp` e os testes nao iniciam agendamento.
+
+`GET /api/preferencias-email` e `PATCH /api/preferencias-email` exigem sessao e
+retornam este DTO; o PATCH aceita somente os campos editaveis enviados:
+
+```json
+{
+  "alerta_orcamento_ativo": false,
+  "alerta_orcamento_percentual": 80,
+  "alerta_despesa_ativo": false,
+  "alerta_despesa_valor_minimo": 100,
+  "alerta_receita_ativo": false,
+  "alerta_receita_valor_minimo": 100,
+  "alerta_meta_concluida_ativo": false,
+  "email_verificado": false
+}
+```
+
+Todas as modalidades comecam desligadas. Percentual deve ser inteiro entre 1
+e 100; os dois valores minimos sao numeros positivos entre 0,01 e 9999999999,99,
+com ate duas casas decimais. `email_verificado` e somente leitura. Ativar
+qualquer modalidade exige e-mail confirmado e pode retornar 403
+`EMAIL_NOT_VERIFIED`; contas antigas continuam podendo entrar e confirmar
+opcionalmente. A alteracao de uma modalidade preserva as demais.
+
+**Orcamento:** a API acordada varre o mes atual em `America/Sao_Paulo` ao iniciar
+e a cada 60 segundos. Soma somente despesas confirmadas, sem descontar receitas
+nem usar `valor_real` liquido. Orcamentos zerados, meses passados/futuros e
+usuarios sem opt-in/verificacao nao geram e-mail. O primeiro alerta ocorre ao
+atingir o percentual escolhido (`>=`), e o segundo somente acima de 100% (`>`).
+Se ambos forem ineditos na mesma avaliacao, um e-mail de excesso cobre os dois.
+Em 100% exatos com limiar 100 ha apenas o primeiro. Cada tipo tem no maximo uma
+tentativa por usuario/ano/mes; editar percentual, oscilar gastos, desligar/ligar
+ou recriar o orcamento nao apaga a deduplicacao. Habilitar pode avaliar o saldo
+ja existente do mes atual. Um cruzamento desfeito antes da varredura nao gera
+alerta; a apuracao independe da origem dos dados (site/app, Pluggy ou WhatsApp).
+
+**Novos lancamentos e metas:** triggers SQL registram eventos na mesma transacao
+da escrita, sem SMTP/HTTP. Despesa/receita gera evento quando nasce confirmada
+ou muda de pendente/cancelada para confirmada e seu valor atinge o minimo da respectiva
+modalidade. Editar o valor/categoria de um registro ja confirmado nao cria novo
+evento. Ativar uma modalidade nao busca eventos anteriores. Importacoes feitas
+apos o opt-in podem gerar avisos, mesmo para lancamentos de data antiga.
+Metas avisam ao concluir manualmente (inclusive ao criar concluida), atingir
+o objetivo em estado ativo ou baixar o objetivo ate o valor ja acumulado;
+canceladas nao avisam. Reabrir/oscilar nao repete a mesma meta.
+
+O worker agrupa eventos novos por usuario/tipo em um e-mail por lote, com
+quantidade, total e ate tres valores/datas; descricoes, nomes de itens e IDs
+internos nao sao incluidos. A reserva dos eventos e o `lote_id` sao persistidos
+antes do HTTP, e cada evento recebe seu estado final. Antes de enviar, a API
+revalida dono, verificacao, modalidade, fonte, valor e status: fonte removida,
+cancelada, abaixo do minimo ou modalidade desativada cancela o aviso pendente.
+Deduplica-se por usuario/fonte/tipo, mesmo se a fonte for apagada. A fila nao
+tem FK para usuario/fonte para evitar inverter locks dos triggers financeiros;
+a exclusao da conta limpa a fila explicitamente depois das fontes e o worker
+limpa orfaos, sem enviar a titulares inexistentes.
+
+No Render Free, a API pode dormir: os avisos aguardam ate voltar a executar e
+nao sao alertas bancarios instantaneos. Nao ha retry automatico. Reservas
+abandonadas por reinicio viram `incerto` apos dois minutos e nao sao reenviadas;
+isso privilegia evitar duplicatas e pode perder uma tentativa. E-mail aceito
+pelo Gmail nao garante chegada a caixa de entrada. Desativar/excluir cancela
+pendencias, mas nao revoga uma mensagem ja em transito. Logs guardam somente
+codigos controlados, sem enderecos, valores, tokens ou respostas brutas.
+
+No site, as preferencias ficam em Perfil; no mobile, Mais > Preferencias de
+e-mail. Avisos de seguranca de senha nao dependem desses consentimentos.
+Os testes budget-email-database.test.js e financial-event-email-database.test.js
+usam PostgreSQL loopback descartavel e remetente falso para validar SQL,
+deduplicacao, lotes, rollback, concorrencia e exclusao sem acessar Gmail/Neon.
+
 ---
+
 
 ## 3. Testar no Postman
 
@@ -302,6 +382,7 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 | PATCH| `/auth/password` | Troca a senha do usuario logado |
 | GET  | `/profile` | Dados do profile |
 | PATCH| `/profile` | Atualiza `nome` / `telefone` |
+| GET / PATCH | `/preferencias-email` | Consulta / atualiza consentimentos e limites dos alertas financeiros |
 | GET / POST | `/metas` | Lista / cria meta |
 | PATCH / DELETE | `/metas/:id` | Atualiza / remove meta |
 | GET / POST | `/orcamentos` | Lista / cria orcamento |

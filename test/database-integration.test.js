@@ -361,7 +361,7 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
       const integration = (await db.query("INSERT INTO open_finance_tokens (id_usuario, instituicao, access_token_enc, expira_em) VALUES ($1, 'Sandbox exclusao', 'shared-legacy-item-id', NOW() + INTERVAL '1 day') RETURNING id", [account.user.id])).rows[0];
       const expense = await expectRequest(201, 'POST', '/despesas', {
         id_orcamento: ownedBudget.id, id_categoria: category.id, id_metas: goal.id,
-        valor: 20, data_transacao: '2026-04-15', tipo: 'despesa',
+        valor: 20, data_transacao: '2026-04-15', tipo: 'despesa', descricao: 'Despesa sintetica para exclusao',
       }, account.token);
       await db.query('UPDATE despesas SET id_integracao = $1 WHERE id = $2', [integration.id, expense.id]);
       await db.query("INSERT INTO notificacoes (id_usuario, tipo, titulo, mensagem) VALUES ($1, 'relatorio', 'Sintetico', 'Sintetico')", [account.user.id]);
