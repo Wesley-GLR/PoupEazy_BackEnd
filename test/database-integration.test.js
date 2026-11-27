@@ -42,6 +42,7 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
   let goalA;
   let goalB;
   let closedGoal;
+  const sentEmails = [];
   const password = 'SyntheticPassword123!';
   const schema = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
 
@@ -79,7 +80,7 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     await admin.query(`CREATE DATABASE "${testDatabase}"`);
     created = true;
     await db.query(schema);
-    server = createApp().listen(0, '127.0.0.1');
+    server = createApp({ sendEmail: async (message) => { sentEmails.push(message); } }).listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     base = `http://127.0.0.1:${server.address().port}`;
     accountA = await expectRequest(201, 'POST', '/auth/register', { email: 'account.a@example.test', password, nome: 'Pessoa A sintetica' });
@@ -251,18 +252,43 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     await expectRequest(204, 'DELETE', `/categorias/${categoryA.id}`, undefined, accountA.token);
   });
 
-  test('DB-14 recuperacao local valida expiracao, uso unico e senha antiga/nova sem envio de email', async () => {
+  test('DB-14 recuperacao usa email simulado, hash, cooldown e consumo concorrente unico', async () => {
     const email = 'reset.account@example.test';
     const createdAccount = await expectRequest(201, 'POST', '/auth/register', { email, password });
+    const latestToken = () => {
+      const message = sentEmails.filter((entry) => entry.to === email).at(-1);
+      assert.ok(message);
+      return new URL(message.text.match(/https?:\/\/\S+/)[0]).searchParams.get('token');
+    };
     const unknown = await expectRequest(200, 'POST', '/auth/forgot-password', { email: 'unknown@example.test' });
     assert.equal('resetToken' in unknown, false);
-    const first = await expectRequest(200, 'POST', '/auth/forgot-password', { email });
-    assert.equal(typeof first.resetToken, 'string');
+    const before = sentEmails.length;
+    const firstRequests = await Promise.all([
+      expectRequest(200, 'POST', '/auth/forgot-password', { email }),
+      expectRequest(200, 'POST', '/auth/forgot-password', { email }),
+    ]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(firstRequests[0], unknown);
+    assert.deepEqual(firstRequests[1], unknown);
+    assert.equal(sentEmails.length, before + 1, 'cooldown deve permitir apenas um envio');
+    const firstToken = latestToken();
+    const stored = (await db.query('SELECT reset_token FROM usuarios WHERE id = $1', [createdAccount.user.id])).rows[0];
+    assert.equal(stored.reset_token, crypto.createHash('sha256').update(firstToken).digest('hex'));
+    assert.notEqual(stored.reset_token, firstToken);
     await db.query("UPDATE usuarios SET reset_expira_em = NOW() - INTERVAL '1 second' WHERE id = $1", [createdAccount.user.id]);
-    await expectRequest(400, 'POST', '/auth/reset-password', { token: first.resetToken, novaSenha: 'NewSyntheticPassword123!' });
-    const valid = await expectRequest(200, 'POST', '/auth/forgot-password', { email });
-    await expectRequest(200, 'POST', '/auth/reset-password', { token: valid.resetToken, novaSenha: 'NewSyntheticPassword123!' });
-    await expectRequest(400, 'POST', '/auth/reset-password', { token: valid.resetToken, novaSenha: 'AnotherSyntheticPassword123!' });
+    const expired = await expectRequest(400, 'POST', '/auth/reset-password', { token: firstToken, novaSenha: 'NewSyntheticPassword123!' });
+    assert.equal(expired.code, 'RESET_TOKEN_INVALID');
+    await expectRequest(200, 'POST', '/auth/forgot-password', { email });
+    await new Promise((resolve) => setImmediate(resolve));
+    const validToken = latestToken();
+    const consumed = await Promise.all([
+      request('POST', '/auth/reset-password', { token: validToken, novaSenha: 'NewSyntheticPassword123!' }),
+      request('POST', '/auth/reset-password', { token: validToken, novaSenha: 'NewSyntheticPassword123!' }),
+    ]);
+    assert.deepEqual(consumed.map((result) => result.status).sort(), [200, 400]);
+    assert.equal(consumed.find((result) => result.status === 400).body.code, 'RESET_TOKEN_INVALID');
+    await expectRequest(400, 'POST', '/auth/reset-password', { token: validToken, novaSenha: 'AnotherSyntheticPassword123!' });
+    await expectRequest(401, 'GET', '/metas', undefined, createdAccount.token);
     await expectRequest(401, 'POST', '/auth/login', { email, password });
     const login = await expectRequest(200, 'POST', '/auth/login', { email, password: 'NewSyntheticPassword123!' });
     assert.equal(login.user.id, createdAccount.user.id);

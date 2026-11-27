@@ -1,14 +1,13 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
 const db = require('../db');
 const config = require('../config');
 const { auth, gerarToken } = require('../middleware/auth');
 const { ApiError } = require('../middleware/errorHandler');
 const { validateEmail, validateString } = require('../utils/validation');
 const { deleteAccount } = require('../services/account-deletion.service');
-
-const router = express.Router();
+const { createGmailService, GmailEmailError } = require('../services/gmail.service');
+const { preparePasswordReset, consumePasswordReset } = require('../services/password-reset.service');
 
 // Remove campos sensiveis antes de devolver o usuario para o cliente.
 function publicUser(u) {
@@ -29,6 +28,12 @@ function validatePassword(value, fieldName = 'password') {
   }
   return value;
 }
+
+function createAuthRouter({ sendEmail } = {}) {
+const router = express.Router();
+// A injecao explicita habilita apenas o transporte falso nos testes.
+const emailAvailable = typeof sendEmail === 'function' || config.email.enabled;
+const deliverEmail = sendEmail || createGmailService(config.email).send;
 
 // POST /api/auth/register
 // Cria usuario + profile em uma unica transacao (substitui o trigger handle_new_user).
@@ -168,73 +173,56 @@ router.get('/me', auth, async (req, res, next) => {
 });
 
 // POST /api/auth/forgot-password
-// Gera um token de reset valido por 1h. Em desenvolvimento, retorna o token no corpo
-// para testar via Postman (sem precisar de servidor de e-mail).
 router.post('/forgot-password', async (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
   if (!req.body?.email) {
     return next(new ApiError(400, 'email e obrigatorio.'));
   }
 
   try {
     const email = validateEmail(req.body.email);
-    const { rows } = await db.query('SELECT id FROM usuarios WHERE LOWER(email) = $1', [email]);
-    const usuario = rows[0];
-
-    // Mensagem generica sempre (nao revela se o e-mail existe).
-    const respostaPadrao = {
-      message: 'Se o e-mail existir, um link de recuperacao foi gerado.',
-    };
-
-    if (!usuario) {
-      return res.json(respostaPadrao);
+    if (!emailAvailable) {
+      throw new ApiError(503, 'A recuperacao de senha esta temporariamente indisponivel.', 'EMAIL_DISABLED');
     }
-
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const expiraEm = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
-
-    await db.query(
-      'UPDATE usuarios SET reset_token = $1, reset_expira_em = $2 WHERE id = $3',
-      [resetToken, expiraEm, usuario.id]
-    );
-
-    if (config.isDev) {
-      // Apenas em DEV: facilita o teste manual.
-      return res.json({ ...respostaPadrao, resetToken });
+    const message = await preparePasswordReset({ database: db, email, resetUrl: config.passwordResetUrl });
+    if (message) {
+      // O transporte comeca depois da resposta: sua latencia nao revela contas.
+      // Sem fila duravel nesta etapa; reinicio pode exigir novo pedido apos 60s.
+      res.once('finish', () => {
+        Promise.resolve().then(() => deliverEmail(message)).catch((error) => {
+          const code = error instanceof GmailEmailError
+            ? new GmailEmailError(error.code).code : 'EMAIL_SEND_UNKNOWN';
+          console.error(`[password-reset] ${code}`);
+        });
+      });
     }
-    return res.json(respostaPadrao);
+    return res.json({ message: 'Se houver uma conta com esse e-mail, voce recebera um link para redefinir a senha. Aguarde pelo menos 60 segundos antes de tentar novamente.' });
   } catch (err) {
-    return next(err);
+    if (err instanceof ApiError) return next(err);
+    console.error('[password-reset] RESET_DATABASE_FAILED');
+    return next(new ApiError(503, 'A recuperacao de senha esta temporariamente indisponivel.', 'RESET_UNAVAILABLE'));
   }
 });
 
 // POST /api/auth/reset-password
 router.post('/reset-password', async (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
   const { token, novaSenha } = req.body || {};
-  if (!token || !novaSenha) {
-    return next(new ApiError(400, 'token e novaSenha sao obrigatorios.'));
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+    return next(new ApiError(400, 'Token de recuperacao invalido ou expirado.', 'RESET_TOKEN_INVALID'));
   }
 
   try {
-    const tokenNormalizado = validateString(token, 'token', { max: 128 });
+    if (typeof novaSenha !== 'string') throw new ApiError(422, 'Informe uma nova senha valida.');
     const senha = validatePassword(novaSenha, 'novaSenha');
-    const { rows } = await db.query(
-      'SELECT * FROM usuarios WHERE reset_token = $1 AND reset_expira_em > NOW()',
-      [tokenNormalizado]
-    );
-    const usuario = rows[0];
-    if (!usuario) {
-      throw new ApiError(400, 'Token de recuperacao invalido ou expirado.');
-    }
-
     const senhaHash = await bcrypt.hash(senha, 10);
-    await db.query(
-      'UPDATE usuarios SET senha_hash = $1, reset_token = NULL, reset_expira_em = NULL WHERE id = $2',
-      [senhaHash, usuario.id]
-    );
-
+    const consumed = await consumePasswordReset({ database: db, token, passwordHash: senhaHash });
+    if (!consumed) throw new ApiError(400, 'Token de recuperacao invalido ou expirado.', 'RESET_TOKEN_INVALID');
     return res.json({ message: 'Senha atualizada com sucesso.' });
   } catch (err) {
-    return next(err);
+    if (err instanceof ApiError) return next(err);
+    console.error('[password-reset] RESET_DATABASE_FAILED');
+    return next(new ApiError(503, 'Nao foi possivel redefinir a senha. Tente novamente.', 'RESET_UNAVAILABLE'));
   }
 });
 
@@ -248,12 +236,14 @@ router.patch('/password', auth, async (req, res, next) => {
   try {
     const senha = validatePassword(novaSenha, 'novaSenha');
     const senhaHash = await bcrypt.hash(senha, 10);
-    await db.query('UPDATE usuarios SET senha_hash = $1 WHERE id = $2', [senhaHash, req.userId]);
+    await db.query('UPDATE usuarios SET senha_hash = $1, reset_token = NULL, reset_expira_em = NULL WHERE id = $2', [senhaHash, req.userId]);
     return res.json({ message: 'Senha atualizada com sucesso.' });
   } catch (err) {
     return next(err);
   }
 });
 
-module.exports = router;
-module.exports.validatePassword = validatePassword;
+return router;
+}
+
+module.exports = { createAuthRouter, validatePassword };

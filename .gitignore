@@ -1,6 +1,17 @@
 node_modules/
 .env
 .env.local
+.env.*
+!.env.example
+# Arquivos privados de OAuth baixados do Google ou gerados localmente.
+client_secret*.json
+credentials.json
+token.json
+tokens.json
+gmail-credentials*.json
+gmail-token*.json
+oauth-credentials*.json
+oauth-tokens*.json
 *.log
 npm-debug.log*
 dist/

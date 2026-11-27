@@ -5,7 +5,7 @@ const { rateLimit } = require('express-rate-limit');
 const config = require('./config');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
-const authRoutes = require('./routes/auth.routes');
+const { createAuthRouter } = require('./routes/auth.routes');
 const profileRoutes = require('./routes/profile.routes');
 const metasRoutes = require('./routes/metas.routes');
 const orcamentosRoutes = require('./routes/orcamentos.routes');
@@ -17,7 +17,7 @@ const pluggyRoutes = require('./routes/pluggy.routes');
 const relatoriosRoutes = require('./routes/relatorios.routes');
 const { createWebhookRouter, createLinkRouter } = require('./routes/whatsapp.routes');
 
-function createApp({ sendWhatsAppText } = {}) {
+function createApp({ sendWhatsAppText, sendEmail } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -56,7 +56,7 @@ function createApp({ sendWhatsAppText } = {}) {
   // Nao divulga ambiente, versao ou detalhes de infraestrutura.
   app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-  app.use('/api/auth', authRoutes);
+  app.use('/api/auth', createAuthRouter({ sendEmail }));
   app.use('/api/profile', profileRoutes);
   app.use('/api/metas', metasRoutes);
   app.use('/api/orcamentos', orcamentosRoutes);

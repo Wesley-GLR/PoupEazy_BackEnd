@@ -114,7 +114,7 @@ test('ACCOUNT-04 endpoint publico reautentica, normaliza email e so confirma apo
 
 test('ACCOUNT-05 JWT de uma conta excluida nao chega ao recurso protegido', async (t) => {
   t.mock.method(db, 'query', async (sql, values) => {
-    assert.equal(sql, 'SELECT 1 FROM usuarios WHERE id = $1');
+    assert.equal(sql, 'SELECT id, senha_hash FROM usuarios WHERE id = $1');
     assert.deepEqual(values, [user.id]);
     return { rows: [], rowCount: 0 };
   });

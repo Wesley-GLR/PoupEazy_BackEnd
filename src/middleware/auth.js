@@ -1,8 +1,15 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('node:crypto');
 const config = require('../config');
 const db = require('../db');
 const { ApiError } = require('./errorHandler');
 const { validateUuid } = require('../utils/validation');
+
+function credentialMarker(usuario) {
+  return crypto.createHmac('sha256', config.jwtSecret)
+    .update('poupeazy-credentials-v1\0').update(usuario.id).update('\0')
+    .update(usuario.senha_hash).digest('hex');
+}
 
 // Middleware de autenticacao.
 // Substitui o auth.uid() do Supabase: extrai o id do usuario do token JWT
@@ -19,14 +26,15 @@ async function auth(req, res, next) {
   try {
     payload = jwt.verify(token, config.jwtSecret);
     validateUuid(payload.sub, 'usuario');
+    if (typeof payload.cred !== 'string' || !/^[a-f0-9]{64}$/.test(payload.cred)) throw new Error('legacy-token');
   } catch (err) {
     return next(new ApiError(401, 'Token invalido ou expirado.'));
   }
 
   try {
-    // JWTs emitidos antes da exclusao nao podem continuar acessando recursos.
-    const { rowCount } = await db.query('SELECT 1 FROM usuarios WHERE id = $1', [payload.sub]);
-    if (!rowCount) {
+    // Exclusao ou troca/reset de senha invalida todos os JWTs ja emitidos.
+    const { rows: [usuario] } = await db.query('SELECT id, senha_hash FROM usuarios WHERE id = $1', [payload.sub]);
+    if (!usuario || !crypto.timingSafeEqual(Buffer.from(payload.cred, 'hex'), Buffer.from(credentialMarker(usuario), 'hex'))) {
       return next(new ApiError(401, 'Token invalido ou expirado.'));
     }
     req.userId = payload.sub;
@@ -39,7 +47,7 @@ async function auth(req, res, next) {
 
 // Gera um token assinado para o usuario informado.
 function gerarToken(usuario) {
-  return jwt.sign({ sub: usuario.id, email: usuario.email }, config.jwtSecret, {
+  return jwt.sign({ sub: usuario.id, email: usuario.email, cred: credentialMarker(usuario) }, config.jwtSecret, {
     expiresIn: config.jwtExpiresIn,
   });
 }
