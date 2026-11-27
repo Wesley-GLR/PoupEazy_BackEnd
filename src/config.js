@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { readEmailConfig, readPasswordResetUrl } = require('./config/email');
+const { readEmailConfig, readPasswordResetUrl, readEmailVerificationUrl } = require('./config/email');
 
 const whatsappProvider = process.env.WHATSAPP_PROVIDER || 'meta';
 
@@ -14,6 +14,7 @@ const config = {
   corsOrigin: process.env.CORS_ORIGIN || '*',
   email: readEmailConfig(),
   passwordResetUrl: readPasswordResetUrl(),
+  emailVerificationUrl: readEmailVerificationUrl(),
   jsonBodyLimit: process.env.JSON_BODY_LIMIT || '100kb',
   trustProxy: process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1',
   rateLimit: {

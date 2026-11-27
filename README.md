@@ -83,8 +83,8 @@ no ambiente antes, se for usar a Pluggy.
 ### 2.5 Gmail API: envio de e-mail e recuperacao de senha
 
 O transporte de e-mail usa OAuth e a Gmail API por HTTPS. Ha um comando local
-para enviar uma mensagem fixa de teste e um fluxo de recuperacao de senha.
-Cadastro/confirmacao, notificacoes e relatorios ainda nao disparam e-mails.
+para enviar uma mensagem fixa de teste, recuperacao de senha e confirmacao de cadastro.
+Notificacoes e relatorios ainda nao disparam e-mails.
 O envio fica desabilitado por padrao.
 
 1. Na Google Cloud, habilite a Gmail API no projeto do cliente OAuth. O refresh
@@ -101,6 +101,7 @@ O envio fica desabilitado por padrao.
    GMAIL_REFRESH_TOKEN=preencha_localmente
    GMAIL_TEST_RECIPIENT=poupeazy@gmail.com
    PASSWORD_RESET_URL=https://poup-eazy.vercel.app/redefinir-senha
+   EMAIL_VERIFICATION_URL=https://poup-eazy.vercel.app/confirmar-email
    ```
 
    `GMAIL_TEST_RECIPIENT` aceita um unico e-mail. Se ficar vazio, o teste envia
@@ -186,14 +187,76 @@ Os logs registram apenas codigos controlados, sem endereco, token, link ou
 excecao bruta. Essa limitacao de durabilidade deve ser resolvida antes de exigir
 garantia de entrega em producao.
 
+### 2.7 Confirmacao de cadastro e ordem de atualizacao
+
+**Antes de publicar esta versao do backend em um banco existente**, aplique
+`db/migrations/007_email_verification.sql` no editor SQL do banco correto, com
+os procedimentos habituais de backup da equipe. A migration acrescenta quatro
+colunas e muda o padrao apenas para contas futuras; nao apaga dados. Nao basta
+reexecutar `schema.sql`, pois `CREATE TABLE IF NOT EXISTS` nao altera tabelas
+existentes. O arquivo pode ser reaplicado sem liberar contas pendentes.
+
+A ordem e: aplicar a migration 007; configurar `EMAIL_ENABLED=true`, as
+credenciais Gmail e `EMAIL_VERIFICATION_URL` no ambiente privado da API;
+publicar backend e clientes compativeis com o novo retorno do cadastro.
+O padrao da URL e `https://poup-eazy.vercel.app/confirmar-email`. Para testes
+locais, use `http://localhost:5173/confirmar-email` e o frontend com
+`VITE_API_URL=http://localhost:3001/api`. Valem as mesmas regras HTTPS e loopback
+da URL de recuperacao. Nenhuma migration e executada automaticamente no startup.
+
+Contas anteriores a migration mantem `email_verificacao_obrigatoria=false` e
+`email_verificado_em=NULL`: continuam entrando, sem serem declaradas verificadas.
+Contas novas recebem `email_verificacao_obrigatoria=true` e precisam confirmar
+o endereco antes do primeiro login. Nao execute um UPDATE geral marcando contas
+antigas como verificadas ou liberando contas novas. Em instalacoes novas,
+`schema.sql` ja usa o padrao TRUE.
+
+`POST /api/auth/register` cria usuario, perfil e hash do token de confirmacao na
+mesma transacao e retorna 201 com `{ "message": "...", "emailVerificationRequired": true }`.
+Nao retorna token JWT, usuario, perfil ou sessao. Com envio desabilitado, retorna
+503 com `code: "EMAIL_DISABLED"` antes de criar uma conta que ficaria bloqueada.
+O envio Gmail inicia depois do commit e da resposta; falhas preservam a conta
+pendente, e o usuario pode solicitar outro link apos pelo menos 60 segundos.
+
+`POST /api/auth/confirm-email` recebe `{ "token": "64-caracteres-hex" }` e retorna
+200 com somente `message`. O token aleatorio tem SHA-256 armazenado em
+`verificacao_token_hash`, separado do reset, validade de 24 horas e uso unico
+consumido atomicamente. Link malformado, vencido, substituido ou usado retorna
+400 com `code: "EMAIL_VERIFICATION_TOKEN_INVALID"`. Um GET nunca confirma a
+conta: a pagina deve pedir que o usuario pressione o botao que faz o POST.
+Confirmar nao inicia sessao automaticamente; depois o usuario faz login.
+
+`POST /api/auth/resend-verification` recebe `{ "email": "..." }` e responde 200
+generico para conta desconhecida, ja confirmada ou durante o
+cooldown. A emissao e limitada atomicamente a uma vez por minuto por conta,
+inclusive entre IPs/processos; um novo link invalida o anterior. Com envio
+desabilitado, retorna o mesmo 503 `EMAIL_DISABLED` para qualquer endereco valido.
+Indisponibilidade do banco retorna 503 `EMAIL_VERIFICATION_UNAVAILABLE`.
+Contas antigas com e-mail ainda nao verificado tambem podem solicitar e concluir
+essa confirmacao opcional: passam a `email_verificado=true` e mantem
+`email_verificacao_obrigatoria=false`, sem perder o acesso anterior.
+
+O login verifica a senha antes de informar que falta confirmar: senha errada
+continua retornando 401; credenciais corretas de conta pendente retornam 403
+com `code: "EMAIL_NOT_VERIFIED"`, sem JWT. O middleware repete essa verificacao
+para recursos protegidos. Reset de senha nao confirma nem libera uma conta.
+Os DTOs publicos do login e `/auth/me` incluem `email_verificado` e
+`email_verificacao_obrigatoria`, sem hashes ou tokens internos.
+
+O envio usa o mesmo mecanismo sem fila duravel documentado no reset: resposta
+nao garante entrega, reinicios podem perder a tentativa e nao ha retry automatico.
+Os logs guardam apenas codigos controlados. Exclusao da conta remove os campos
+de verificacao juntamente com o usuario.
+
 ---
 
 ## 3. Testar no Postman
 
 1. Importe o arquivo `PoupEazy.postman_collection.json`.
 2. A collection ja vem com as variaveis `baseUrl` (`http://localhost:3001/api`) e `token`.
-3. Rode **Auth > Register** (ou **Login**): o script de teste salva o JWT na variavel
-   `{{token}}` automaticamente, e todas as outras requisicoes ja usam esse token.
+3. Para conta nova, rode **Auth > Register**, confirme pelo link recebido e depois
+   rode **Login**. O cadastro nao retorna JWT. Guarde o token do login em
+   `{{token}}`, utilizado pelas demais requisicoes.
 4. A partir dai, teste as demais pastas (Metas, Orcamentos, Categorias, Despesas, etc.).
 
 ### Mapa de endpoints
@@ -204,7 +267,9 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 | Metodo | Rota | Descricao |
 |--------|------|-----------|
 | GET  | `/health` | Status da API (publico) |
-| POST | `/auth/register` | Cria usuario + profile, retorna `{ token, user, profile }` |
+| POST | `/auth/register` | Cria conta pendente e retorna `{ message, emailVerificationRequired: true }`, sem sessao |
+| POST | `/auth/confirm-email` | Confirma token de 24h por POST; retorna `{ message }` |
+| POST | `/auth/resend-verification` | Solicita novo link com resposta generica e cooldown de 60s |
 | POST | `/auth/login` | Login, retorna `{ token, user, profile }` |
 | POST | `/auth/delete-account` | Publico: reautentica `{ email, password, confirmacao: "EXCLUIR" }` e exclui a conta e dados locais associados |
 | GET  | `/auth/me` | Usuario + profile da sessao atual |

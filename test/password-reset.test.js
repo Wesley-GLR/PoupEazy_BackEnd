@@ -46,7 +46,7 @@ function accountStore() {
         user.reset_expira_em = null;
         return { rows: [{ id: user.id }], rowCount: 1 };
       }
-      if (sql === 'SELECT id, senha_hash FROM usuarios WHERE id = $1') return { rows: [{ ...user }], rowCount: 1 };
+      if (sql === 'SELECT id, senha_hash, email_verificado_em, email_verificacao_obrigatoria FROM usuarios WHERE id = $1') return { rows: [{ ...user }], rowCount: 1 };
       if (sql.startsWith('SELECT * FROM usuarios WHERE LOWER(email)')) return { rows: [{ ...user }], rowCount: 1 };
       if (sql.startsWith('SELECT * FROM profiles')) return { rows: [{ id: user.id, nome: 'Sintetico' }], rowCount: 1 };
       if (sql.includes('FROM metas')) return { rows: [], rowCount: 0 };

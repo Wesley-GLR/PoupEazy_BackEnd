@@ -63,6 +63,22 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     return result.body;
   }
 
+  function latestEmailToken(email, pathname) {
+    const message = sentEmails.filter((entry) => entry.to === email && entry.text.includes(pathname)).at(-1);
+    assert.ok(message, `Mensagem simulada esperada para ${pathname}`);
+    return new URL(message.text.match(/https?:\/\/\S+/)[0]).searchParams.get('token');
+  }
+
+  async function registerAndLogin(body) {
+    const registration = await expectRequest(201, 'POST', '/auth/register', body);
+    assert.equal(registration.emailVerificationRequired, true);
+    assert.equal('token' in registration, false);
+    await new Promise((resolve) => setImmediate(resolve));
+    const verificationToken = latestEmailToken(body.email, '/confirmar-email');
+    await expectRequest(200, 'POST', '/auth/confirm-email', { token: verificationToken });
+    return expectRequest(200, 'POST', '/auth/login', { email: body.email, password: body.password });
+  }
+
   const budget = (account, mes, ano = 2026) => expectRequest(200, 'POST', '/orcamentos/get-or-create', { mes, ano }, account.token);
   const transaction = (overrides = {}) => ({
     id_orcamento: budgetA.id, id_categoria: expenseCategory.id,
@@ -83,8 +99,8 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     server = createApp({ sendEmail: async (message) => { sentEmails.push(message); } }).listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     base = `http://127.0.0.1:${server.address().port}`;
-    accountA = await expectRequest(201, 'POST', '/auth/register', { email: 'account.a@example.test', password, nome: 'Pessoa A sintetica' });
-    accountB = await expectRequest(201, 'POST', '/auth/register', { email: 'account.b@example.test', password, nome: 'Pessoa B sintetica' });
+    accountA = await registerAndLogin({ email: 'account.a@example.test', password, nome: 'Pessoa A sintetica' });
+    accountB = await registerAndLogin({ email: 'account.b@example.test', password, nome: 'Pessoa B sintetica' });
     budgetA = await budget(accountA, 10);
     budgetB = await budget(accountB, 10);
     const categories = await expectRequest(200, 'GET', '/categorias', undefined, accountA.token);
@@ -124,9 +140,15 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     assert.equal(accountA.profile.id, accountA.user.id);
     assert.equal(accountA.profile.nome, 'Pessoa A sintetica');
     assert.equal('senha_hash' in accountA.user, false);
-    const stored = (await db.query('SELECT senha_hash FROM usuarios WHERE id = $1', [accountA.user.id])).rows[0];
+    assert.equal(accountA.user.email_verificado, true);
+    assert.equal(accountA.user.email_verificacao_obrigatoria, true);
+    assert.equal('verificacao_token_hash' in accountA.user, false);
+    const stored = (await db.query('SELECT senha_hash, email_verificado_em, verificacao_token_hash, verificacao_expira_em FROM usuarios WHERE id = $1', [accountA.user.id])).rows[0];
     assert.notEqual(stored.senha_hash, password);
     assert.equal(await bcrypt.compare(password, stored.senha_hash), true);
+    assert.ok(stored.email_verificado_em);
+    assert.equal(stored.verificacao_token_hash, null);
+    assert.equal(stored.verificacao_expira_em, null);
   });
 
   test('DB-03 login normaliza email; senha incorreta e cadastro duplicado sao recusados', async () => {
@@ -254,12 +276,8 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
 
   test('DB-14 recuperacao usa email simulado, hash, cooldown e consumo concorrente unico', async () => {
     const email = 'reset.account@example.test';
-    const createdAccount = await expectRequest(201, 'POST', '/auth/register', { email, password });
-    const latestToken = () => {
-      const message = sentEmails.filter((entry) => entry.to === email).at(-1);
-      assert.ok(message);
-      return new URL(message.text.match(/https?:\/\/\S+/)[0]).searchParams.get('token');
-    };
+    const createdAccount = await registerAndLogin({ email, password });
+    const latestToken = () => latestEmailToken(email, '/redefinir-senha');
     const unknown = await expectRequest(200, 'POST', '/auth/forgot-password', { email: 'unknown@example.test' });
     assert.equal('resetToken' in unknown, false);
     const before = sentEmails.length;
@@ -333,7 +351,7 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
 
   test('DB-17 exclusao publica apaga dados associados, preserva outra conta e invalida JWT', async () => {
     async function seed(name, phone) {
-      const account = await expectRequest(201, 'POST', '/auth/register', { email: `${name}@example.test`, password });
+      const account = await registerAndLogin({ email: `${name}@example.test`, password });
       const ownedBudget = await budget(account, 4);
       const category = await expectRequest(201, 'POST', '/categorias', { nome: name, tipo: 'despesa_variavel' }, account.token);
       const goal = await expectRequest(201, 'POST', '/metas', { nome: name, valor_objetivo: 100, data_limite: '2027-12-31' }, account.token);
@@ -379,7 +397,7 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
   });
 
   test('DB-18 falha SQL no fim da exclusao restaura a conta e suas despesas', async () => {
-    const account = await expectRequest(201, 'POST', '/auth/register', { email: 'delete-rollback@example.test', password });
+    const account = await registerAndLogin({ email: 'delete-rollback@example.test', password });
     const ownedBudget = await budget(account, 5);
     const expense = await expectRequest(201, 'POST', '/despesas', transaction({ id_orcamento: ownedBudget.id, data_transacao: '2026-05-15' }), account.token);
     await db.query(`CREATE FUNCTION test_block_account_delete() RETURNS TRIGGER LANGUAGE plpgsql AS $$
@@ -398,5 +416,90 @@ describe('PostgreSQL real + HTTP local (opt-in TEST_DATABASE_URL)', { skip: !exp
     } finally {
       await db.query('DROP TRIGGER test_block_account_delete ON usuarios; DROP FUNCTION test_block_account_delete()');
     }
+  });
+
+  test('DB-19 migration de verificacao preserva contas antigas e pode ser reaplicada sem liberar novas', async () => {
+    const migration = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', '007_email_verification.sql'), 'utf8');
+    const isolatedSchema = `email_migration_${crypto.randomBytes(8).toString('hex')}`;
+    const connection = await db.getClient();
+    try {
+      await connection.query(`CREATE SCHEMA "${isolatedSchema}"`);
+      await connection.query(`SET search_path TO "${isolatedSchema}", public`);
+      await connection.query(`CREATE TABLE usuarios (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email VARCHAR(255) NOT NULL UNIQUE,
+        senha_hash TEXT NOT NULL, reset_token TEXT, reset_expira_em TIMESTAMPTZ,
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await connection.query("INSERT INTO usuarios (email, senha_hash) VALUES ('legacy@example.test', 'synthetic-hash')");
+      await connection.query(migration);
+      const legacy = (await connection.query("SELECT email_verificacao_obrigatoria, email_verificado_em FROM usuarios WHERE email = 'legacy@example.test'")).rows[0];
+      assert.deepEqual(legacy, { email_verificacao_obrigatoria: false, email_verificado_em: null });
+
+      await connection.query(`INSERT INTO usuarios (email, senha_hash, verificacao_token_hash, verificacao_expira_em)
+        VALUES ('pending@example.test', 'synthetic-hash', 'synthetic-verification-hash', NOW() + INTERVAL '24 hours')`);
+      const beforeReapply = (await connection.query("SELECT email_verificacao_obrigatoria, email_verificado_em, verificacao_token_hash, verificacao_expira_em FROM usuarios WHERE email = 'pending@example.test'")).rows[0];
+      assert.equal(beforeReapply.email_verificacao_obrigatoria, true);
+      assert.equal(beforeReapply.email_verificado_em, null);
+      await connection.query(migration);
+      const afterReapply = (await connection.query("SELECT email_verificacao_obrigatoria, email_verificado_em, verificacao_token_hash, verificacao_expira_em FROM usuarios WHERE email = 'pending@example.test'")).rows[0];
+      assert.deepEqual(afterReapply, beforeReapply);
+      const legacyAfterReapply = (await connection.query("SELECT email_verificacao_obrigatoria, email_verificado_em FROM usuarios WHERE email = 'legacy@example.test'")).rows[0];
+      assert.deepEqual(legacyAfterReapply, legacy);
+    } finally {
+      try {
+        // Caso uma migration falhe em transacao, recuperar a conexao antes da limpeza.
+        await connection.query('ROLLBACK');
+        await connection.query('RESET search_path');
+        await connection.query(`DROP SCHEMA IF EXISTS "${isolatedSchema}" CASCADE`);
+      } finally {
+        connection.release();
+      }
+    }
+  });
+
+  test('DB-20 confirmacao e reenvio usam tokens separados com cooldown e consumo concorrentes', async () => {
+    const email = 'pending.verification@example.test';
+    const registration = await expectRequest(201, 'POST', '/auth/register', { email, password });
+    assert.equal(registration.emailVerificationRequired, true);
+    assert.equal('token' in registration, false);
+    await new Promise((resolve) => setImmediate(resolve));
+    const firstToken = latestEmailToken(email, '/confirmar-email');
+    const pending = (await db.query('SELECT id, email_verificado_em, email_verificacao_obrigatoria, verificacao_token_hash, reset_token FROM usuarios WHERE email = $1', [email])).rows[0];
+    assert.equal(pending.email_verificado_em, null);
+    assert.equal(pending.email_verificacao_obrigatoria, true);
+    assert.equal(pending.verificacao_token_hash, crypto.createHash('sha256').update(firstToken).digest('hex'));
+    assert.notEqual(pending.verificacao_token_hash, firstToken);
+    assert.equal(pending.reset_token, null);
+    await expectRequest(401, 'POST', '/auth/login', { email, password: 'wrong-synthetic-password' });
+    const denied = await expectRequest(403, 'POST', '/auth/login', { email, password });
+    assert.equal(denied.code, 'EMAIL_NOT_VERIFIED');
+    const beforeResend = sentEmails.length;
+    const generic = await expectRequest(200, 'POST', '/auth/resend-verification', { email });
+    const unknown = await expectRequest(200, 'POST', '/auth/resend-verification', { email: 'unknown.verification@example.test' });
+    assert.deepEqual(generic, unknown);
+    assert.equal(sentEmails.length, beforeResend);
+
+    await db.query("UPDATE usuarios SET verificacao_expira_em = NOW() + INTERVAL '23 hours 58 minutes' WHERE id = $1", [pending.id]);
+    await Promise.all([
+      expectRequest(200, 'POST', '/auth/resend-verification', { email }),
+      expectRequest(200, 'POST', '/auth/resend-verification', { email }),
+    ]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sentEmails.length, beforeResend + 1);
+    const token = latestEmailToken(email, '/confirmar-email');
+    assert.notEqual(token, firstToken);
+    const superseded = await expectRequest(400, 'POST', '/auth/confirm-email', { token: firstToken });
+    assert.equal(superseded.code, 'EMAIL_VERIFICATION_TOKEN_INVALID');
+    await expectRequest(404, 'GET', `/auth/confirm-email?token=${token}`);
+    const confirmed = await Promise.all([
+      request('POST', '/auth/confirm-email', { token }),
+      request('POST', '/auth/confirm-email', { token }),
+    ]);
+    assert.deepEqual(confirmed.map((result) => result.status).sort(), [200, 400]);
+    assert.equal(confirmed.find((result) => result.status === 400).body.code, 'EMAIL_VERIFICATION_TOKEN_INVALID');
+    assert.deepEqual(Object.keys(confirmed.find((result) => result.status === 200).body), ['message']);
+    const login = await expectRequest(200, 'POST', '/auth/login', { email, password });
+    assert.equal(login.user.email_verificado, true);
+    assert.equal(login.user.email_verificacao_obrigatoria, true);
   });
 });

@@ -50,10 +50,10 @@ function readEmailConfig(env = process.env) {
   return Object.freeze({ enabled: true, fromAddress, clientId, clientSecret, refreshToken, testRecipient });
 }
 
-function readPasswordResetUrl(env = process.env) {
+function readAppEmailUrl(env, variableName, fallback) {
   let url;
   try {
-    url = new URL(env.PASSWORD_RESET_URL || 'https://poup-eazy.vercel.app/redefinir-senha');
+    url = new URL(env[variableName] || fallback);
   } catch {
     throw new GmailEmailError('EMAIL_CONFIG_INVALID');
   }
@@ -66,4 +66,12 @@ function readPasswordResetUrl(env = process.env) {
   return url.toString();
 }
 
-module.exports = { readEmailConfig, readPasswordResetUrl, GmailEmailError, normalizeEmailAddress };
+function readPasswordResetUrl(env = process.env) {
+  return readAppEmailUrl(env, 'PASSWORD_RESET_URL', 'https://poup-eazy.vercel.app/redefinir-senha');
+}
+
+function readEmailVerificationUrl(env = process.env) {
+  return readAppEmailUrl(env, 'EMAIL_VERIFICATION_URL', 'https://poup-eazy.vercel.app/confirmar-email');
+}
+
+module.exports = { readEmailConfig, readPasswordResetUrl, readEmailVerificationUrl, GmailEmailError, normalizeEmailAddress };

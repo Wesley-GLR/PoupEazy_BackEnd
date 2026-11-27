@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS usuarios (
     senha_hash      TEXT          NOT NULL,
     reset_token     TEXT,
     reset_expira_em TIMESTAMPTZ,
+    email_verificado_em TIMESTAMPTZ,
+    email_verificacao_obrigatoria BOOLEAN NOT NULL DEFAULT TRUE,
+    verificacao_token_hash TEXT,
+    verificacao_expira_em TIMESTAMPTZ,
     criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 

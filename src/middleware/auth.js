@@ -33,9 +33,12 @@ async function auth(req, res, next) {
 
   try {
     // Exclusao ou troca/reset de senha invalida todos os JWTs ja emitidos.
-    const { rows: [usuario] } = await db.query('SELECT id, senha_hash FROM usuarios WHERE id = $1', [payload.sub]);
+    const { rows: [usuario] } = await db.query('SELECT id, senha_hash, email_verificado_em, email_verificacao_obrigatoria FROM usuarios WHERE id = $1', [payload.sub]);
     if (!usuario || !crypto.timingSafeEqual(Buffer.from(payload.cred, 'hex'), Buffer.from(credentialMarker(usuario), 'hex'))) {
       return next(new ApiError(401, 'Token invalido ou expirado.'));
+    }
+    if (usuario.email_verificacao_obrigatoria && !usuario.email_verificado_em) {
+      return next(new ApiError(403, 'Confirme seu e-mail para entrar no PoupEazy.', 'EMAIL_NOT_VERIFIED'));
     }
     req.userId = payload.sub;
     req.userEmail = payload.email;

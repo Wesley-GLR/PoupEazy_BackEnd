@@ -45,8 +45,9 @@ test('webhook, vínculo e extrato com PostgreSQL', { skip: !testDatabaseUrl }, a
   await db.query(await readFile(path.join(__dirname, '../db/migrations/006_whatsapp_report.sql'), 'utf8'));
 
   const replies = [];
+  const sentEmails = [];
   let failNextSend = false;
-  const app = createApp({ sendWhatsAppText: async (sender, text) => {
+  const app = createApp({ sendEmail: async (message) => { sentEmails.push(message); }, sendWhatsAppText: async (sender, text) => {
     if (failNextSend) {
       failNextSend = false;
       throw new Error('Transporte indisponível durante o teste.');
@@ -106,11 +107,24 @@ test('webhook, vínculo e extrato com PostgreSQL', { skip: !testDatabaseUrl }, a
   let otherAccount;
   let linkMessage;
   async function register(name) {
+    const email = `${name}@example.test`;
+    const password = 'teste-123456';
     const response = await request('/auth/register', {
-      method: 'POST', body: { email: `${name}@example.test`, password: 'teste-123456', nome: name },
+      method: 'POST', body: { email, password, nome: name },
     });
     assert.equal(response.status, 201);
-    return response.json();
+    const registration = await response.json();
+    assert.equal(registration.emailVerificationRequired, true);
+    assert.equal('token' in registration, false);
+    await new Promise((resolve) => setImmediate(resolve));
+    const message = sentEmails.filter((entry) => entry.to === email && entry.text.includes('/confirmar-email')).at(-1);
+    assert.ok(message);
+    const token = new URL(message.text.match(/https?:\/\/\S+/)[0]).searchParams.get('token');
+    const confirmed = await request('/auth/confirm-email', { method: 'POST', body: { token } });
+    assert.equal(confirmed.status, 200);
+    const login = await request('/auth/login', { method: 'POST', body: { email, password } });
+    assert.equal(login.status, 200);
+    return login.json();
   }
 
   async function code(token) {
