@@ -5,7 +5,7 @@ e ja incorpora a integracao Open Finance (Pluggy).
 
 Stack: **Node.js + Express + PostgreSQL + JWT**.
 
-Para o RF02, consulte o [guia da demonstração do WhatsApp](WHATSAPP_DEMO.md).
+O RF02 permite vincular a conta ao WhatsApp, registrar despesas após confirmação e consultar relatórios. Consulte o [guia de configuração e demonstração do WhatsApp](WHATSAPP_DEMO.md).
 
 - Autenticacao via JWT (bcrypt para hash de senha) no lugar do Supabase Auth.
 - Autorizacao por dono: cada query filtra por `id_usuario` (substitui o RLS/`auth.uid()`).
@@ -122,6 +122,7 @@ Base: `http://localhost:3001/api` — exceto auth publico, tudo exige
 | GET | `/pluggy/token` | Gera connect token da Pluggy |
 | GET | `/pluggy/transactions/:itemId` | Contrato web legado; exige item pertencente ao usuario |
 | POST | `/pluggy/sync/:integrationId` | Importa todas as contas/paginas de forma atomica e idempotente |
+| GET / POST / DELETE | `/whatsapp/vinculo` | Consulta, gera código de vínculo ou desvincula o WhatsApp da conta autenticada |
 | GET | `/relatorios/resumo-mensal` | View `vw_resumo_mensal` |
 | GET | `/relatorios/progresso-metas` | View `vw_progresso_metas` |
 | GET | `/relatorios/historico` | View `vw_historico_comparativo` |
